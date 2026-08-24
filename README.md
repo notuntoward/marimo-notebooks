@@ -59,6 +59,9 @@ uvx marimo edit --sandbox notebooks/plugin_lab.py
 
 The starter notebook never writes to the vault. Make any fixture-generation or mutation step explicit and opt-in.
 
+- [obsidian_color_optimizer.py](https://molab.marimo.io/github/notuntoward/marimo-notebooks/blob/main/notebooks/color-picking/obsidian_color_optimizer.py)
+
+
 ## Seattle traffic work
 
 The traffic notebooks are designed to use public data, with raw inputs excluded from version control. Start by documenting dataset URLs and retrieval dates in the notebook and save small synthetic examples in `data/fixtures/` for tests.
@@ -66,6 +69,8 @@ The traffic notebooks are designed to use public data, with raw inputs excluded 
 ## molab
 
 Keep notebooks self-contained and push them to GitHub. You can then open a notebook in molab from GitHub for hosted, ephemeral execution. Do not expect a molab session to access local vault paths, local credentials, or ignored raw data.
+
+- [obsidian_color_optimizer.py](https://molab.marimo.io/github/notuntoward/marimo-notebooks/blob/main/notebooks/color-picking/obsidian_color_optimizer.py)
 
 ## Agents
 
