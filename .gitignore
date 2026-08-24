@@ -28,3 +28,5 @@ data/derived/
 .idea/
 .DS_Store
 Thumbs.db
+test_marimo.py
+scratch_test.html
