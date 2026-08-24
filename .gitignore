@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# marimo
+__marimo__/
+
+# Local data and generated artifacts
+data/raw/
+data/derived/
+!data/raw/.gitkeep
+!data/derived/.gitkeep
+
+# Local machine configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

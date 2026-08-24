@@ -1,0 +1,35 @@
+name: Validate notebooks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Python files
+        run: python -m compileall -q notebooks src
+      - name: Validate marimo notebooks
+        run: uvx marimo check notebooks
+      - name: Run tests when present
+        run: |
+          if [ -d tests ] && find tests -type f -name 'test_*.py' -print -quit | grep -q .; then
+            uvx --with pytest pytest
+          else
+            echo "No tests yet; skipping."
+          fi
