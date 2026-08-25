@@ -9,7 +9,7 @@
 
 import marimo
 
-__generated_with = "0.14.0"
+__generated_with = "0.24.0"
 app = marimo.App(width="full")
 
 
@@ -24,19 +24,18 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # Seattle traffic analysis
+    mo.md("""
+    # Seattle traffic analysis
 
-        A reproducible workspace for examining public transportation data. Before analyzing
-        a real source, record its URL, retrieval timestamp, relevant geography, time range,
-        and known collection limitations. Keep downloaded records in `data/raw/` (ignored);
-        commit only synthetic or safely redistributable fixtures.
+    A reproducible workspace for examining public transportation data. Before analyzing
+    a real source, record its URL, retrieval timestamp, relevant geography, time range,
+    and known collection limitations. Keep downloaded records in `data/raw/` (ignored);
+    commit only synthetic or safely redistributable fixtures.
 
-        This starter visualization uses synthetic data and makes no claim about actual traffic
-        conditions, crashes, safety, or policy effects.
-        """
-    )
+    This starter visualization uses synthetic data and makes no claim about actual traffic
+    conditions, crashes, safety, or policy effects.
+    """)
+    return
 
 
 @app.cell
@@ -47,7 +46,7 @@ def _(pd):
             "sample_count": [100, 118, 109],
         }
     )
-    return demo,
+    return (demo,)
 
 
 @app.cell
@@ -63,6 +62,7 @@ def _(alt, demo):
         .properties(title="Starter chart — replace with documented public data")
     )
     chart
+    return
 
 
 if __name__ == "__main__":

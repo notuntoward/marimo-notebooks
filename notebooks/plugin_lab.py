@@ -7,7 +7,7 @@
 
 import marimo
 
-__generated_with = "0.14.0"
+__generated_with = "0.24.0"
 app = marimo.App(width="medium")
 
 
@@ -33,26 +33,25 @@ def _(Path, mo, os):
         )
     )
     status
-    return vault,
+    return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # Plugin lab
+    mo.md("""
+    # Plugin lab
 
-        Use this notebook for read-only inspection, fixture design, and analyses that span
-        multiple Obsidian plugins. Keep vault writes behind an explicit UI action and default
-        to synthetic fixtures committed under `data/fixtures/`.
+    Use this notebook for read-only inspection, fixture design, and analyses that span
+    multiple Obsidian plugins. Keep vault writes behind an explicit UI action and default
+    to synthetic fixtures committed under `data/fixtures/`.
 
-        Suggested additions:
+    Suggested additions:
 
-        - Parse saved Markdown output and validate turn/source-footnote invariants.
-        - Generate edge-case link/property fixtures for a test vault.
-        - Compare plugin outputs against expected JSON or Markdown snapshots.
-        """
-    )
+    - Parse saved Markdown output and validate turn/source-footnote invariants.
+    - Generate edge-case link/property fixtures for a test vault.
+    - Compare plugin outputs against expected JSON or Markdown snapshots.
+    """)
+    return
 
 
 if __name__ == "__main__":
