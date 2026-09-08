@@ -3,6 +3,7 @@
 # dependencies = [
 #     "marimo>=0.23.3",
 #     "numpy>=2.5.2",
+#     "scipy==1.18.1",
 #     "wigglystuff>=0.5.28",
 # ]
 # ///
@@ -18,19 +19,15 @@ def _():
     import marimo as mo
     import math
     import itertools
-    from wigglystuff import ColorPicker
-
-    def get_hex(val):
-        """Extract hex from ColorPicker value (dict or string)."""
-        if isinstance(val, dict):
-            return val.get('color', '#000000')
-        return val
+    import numpy as np
+    from scipy.optimize import minimize
 
     def swatch(hexv, w=80, h=30):
         """Return HTML for a color swatch."""
         return mo.Html(f'<div style="width:{w}px;height:{h}px;background:{hexv};border:1px solid #888;border-radius:4px;display:inline-block;vertical-align:middle;"></div>')
 
-    return ColorPicker, get_hex, itertools, math, mo, swatch
+
+    return itertools, math, minimize, mo, np, swatch
 
 
 @app.cell(hide_code=True)
@@ -65,8 +62,9 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(math):
+def _(apca_contrast, math, minimize, mo):
     # ---- sRGB <-> linear ----
+
     def linear_to_srgb(c):
         c = max(0.0, min(1.0, c))
         return 12.92 * c if c <= 0.0031308 else 1.055 * (c ** (1 / 2.4)) - 0.055
@@ -263,7 +261,129 @@ def _(math):
         Bc = max(0, min(255, round(linear_to_srgb(b) * 255)))
         return f"#{R:02x}{G:02x}{Bc:02x}"
 
-    return hex_to_oklch, hex_to_rgb255, mix_oklab, oklch_to_srgb_hex
+    def get_hex(val):
+        """Extract hex from ColorPicker value (dict or string) or slider dictionary."""
+        if isinstance(val, dict):
+            if 'color' in val:
+                return val['color']
+            if 'L' in val and 'C' in val and 'H' in val:
+                hexv, _, _ = oklch_to_srgb_hex(val['L'], val['C'], val['H'])
+                return hexv
+            if 'hex' in val:
+                return val['hex']
+        return str(val)
+
+    def make_color_slider(label, default_hex, reset_trigger=0):
+        L0, C0, H0 = hex_to_oklch(default_hex)
+        return mo.ui.dictionary({
+            "L": mo.ui.slider(0.0, 1.0, value=round(L0, 3), step=0.005, label=f"L"),
+            "C": mo.ui.slider(0.0, 0.35, value=round(C0, 3), step=0.005, label=f"C"),
+            "H": mo.ui.slider(0.0, 360.0, value=round(H0, 1), step=0.5, label=f"H°"),
+        })
+
+
+    def hex_to_oklab(hexstr):
+        r, g, b = [srgb_to_linear(c / 255) for c in hex_to_rgb255(hexstr)]
+        return linear_srgb_to_oklab(r, g, b)
+
+    def solve_simultaneous_link_colors(base_hexes, bgs_hex, text_hex, is_light=True, min_lc_bg=60, min_lc_text=15, max_hue_dev=25, c_max=0.20):
+        N = len(base_hexes)
+        bgs_rgb = [hex_to_rgb255(bg) for bg in bgs_hex]
+        text_rgb = hex_to_rgb255(text_hex)
+        text_lab = hex_to_oklab(text_hex)
+        base_lchs = [hex_to_oklch(b) for b in base_hexes]
+    
+        x0 = []
+        bounds = []
+        for i in range(N):
+            Lb, Cb, Hb = base_lchs[i]
+            init_L = 0.35 if is_light else 0.75
+            init_C = min(max(0.08, Cb), c_max)
+            init_H = Hb
+            x0.extend([init_L, init_C, init_H])
+        
+            L_bnd = (0.12, 0.58) if is_light else (0.62, 0.95)
+            C_bnd = (0.02, c_max)
+            H_bnd = (Hb - max_hue_dev, Hb + max_hue_dev)
+            bounds.extend([L_bnd, C_bnd, H_bnd])
+
+        def objective(params):
+            penalty = 0.0
+            link_labs = []
+        
+            for i in range(N):
+                L, C, H = params[3*i : 3*i+3]
+                Hb = base_lchs[i][2]
+            
+                dh = abs(H - Hb) % 360
+                dh = min(dh, 360 - dh)
+                if dh > max_hue_dev:
+                    penalty += 1000.0 * (dh - max_hue_dev)**2
+                else:
+                    penalty += 0.5 * dh
+                
+                hexv, rgb255, clipped = oklch_to_srgb_hex(L, C, H % 360)
+                if clipped:
+                    penalty += 50.0
+            
+                link_labs.append(hex_to_oklab(hexv))
+            
+                for bg_rgb in bgs_rgb:
+                    lc = abs(apca_contrast(rgb255, bg_rgb))
+                    if lc < min_lc_bg:
+                        penalty += 100.0 * (min_lc_bg - lc)**2
+                    else:
+                        penalty -= 0.1 * lc
+            
+                lc_text = abs(apca_contrast(rgb255, text_rgb))
+                if lc_text < min_lc_text:
+                    penalty += 50.0 * (min_lc_text - lc_text)**2
+
+            all_labs = [text_lab] + link_labs
+            pair_dists = []
+            for i in range(len(all_labs)):
+                for j in range(i + 1, len(all_labs)):
+                    d = math.sqrt(sum((all_labs[i][k] - all_labs[j][k])**2 for k in range(3)))
+                    pair_dists.append(d)
+                    if d < 0.04:
+                        penalty += 500.0 * (0.04 - d)**2
+                    
+            min_dist = min(pair_dists) if pair_dists else 0.0
+            return penalty - 200.0 * min_dist
+
+        res = minimize(objective, x0, method='L-BFGS-B', bounds=bounds)
+    
+        optimized_links = []
+        for i in range(N):
+            L, C, H = res.x[3*i : 3*i+3]
+            hexv, rgb255, clipped = oklch_to_srgb_hex(L, C, H % 360)
+            lc_bg_min = min(abs(apca_contrast(rgb255, bg_rgb)) for bg_rgb in bgs_rgb)
+            lc_text = abs(apca_contrast(rgb255, text_rgb))
+            dh = abs(H % 360 - base_lchs[i][2]) % 360
+            dh = min(dh, 360 - dh)
+            optimized_links.append({
+                'hex': hexv,
+                'L': L,
+                'C': C,
+                'H': H % 360,
+                'clipped': clipped,
+                'min_lc_bg': lc_bg_min,
+                'lc_text': lc_text,
+                'hue_dev': dh
+            })
+        
+        return optimized_links
+
+
+    return (
+        get_hex,
+        hex_to_oklch,
+        hex_to_rgb255,
+        make_color_slider,
+        mix_oklab,
+        oklch_to_srgb_hex,
+        solve_simultaneous_link_colors,
+    )
 
 
 @app.cell(hide_code=True)
@@ -339,31 +459,49 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(ColorPicker, mo):
-    base_color_input = mo.ui.anywidget(ColorPicker(color="#5e81ac"))
-    L_bg_input = mo.ui.anywidget(ColorPicker(color="#fdfdfd"))
-    D_bg_input = mo.ui.anywidget(ColorPicker(color="#1e1e1e"))
-    Fl_input = mo.ui.anywidget(ColorPicker(color="#2e2e2e"))
-    Fd_input = mo.ui.anywidget(ColorPicker(color="#dcdcdc"))
+def _(make_color_slider, mo):
+    reset_theme_btn = mo.ui.button(label="↺ Reset All Color Sliders to Initial Defaults")
+
+    base_color_input = make_color_slider("Base Color 1 (B1)", "#5e81ac")
+    L_bg_input = make_color_slider("Light BG (L)", "#fdfdfd")
+    D_bg_input = make_color_slider("Dark BG (D)", "#1e1e1e")
+    Fl_input = make_color_slider("Light Text (Fl)", "#2e2e2e")
+    Fd_input = make_color_slider("Dark Text (Fd)", "#dcdcdc")
+
+    mix_amount = mo.ui.slider(0.0, 1.0, value=0.12, step=0.01, show_value=True, label="Background mix amount (B into L/D)")
+
+    num_base_colors = mo.ui.slider(1, 6, value=3, step=1, show_value=True, label="Number of Base Colors (N)")
+
+    base_color_2_input = make_color_slider("Base Color 2 (B2)", "#a3be8c")
+    base_color_3_input = make_color_slider("Base Color 3 (B3)", "#d08770")
+    base_color_4_input = make_color_slider("Base Color 4 (B4)", "#b48ead")
+    base_color_5_input = make_color_slider("Base Color 5 (B5)", "#ebcb8b")
+    base_color_6_input = make_color_slider("Base Color 6 (B6)", "#88c0d0")
 
     mix_mode = mo.ui.radio(
         options=["Perceptual (Hunt Effect)", "Separate Sliders", "Linear (Equal t)"],
         value="Perceptual (Hunt Effect)",
         label="Mixing Mode"
     )
-    mix_amount = mo.ui.number(start=0.0, stop=1.0, step=0.01, value=0.15, label="Master base mix (t)")
-    mix_amount_light = mo.ui.number(start=0.0, stop=1.0, step=0.01, value=0.15, label="Light bg mix (t_light)")
-    mix_amount_dark = mo.ui.number(start=0.0, stop=1.0, step=0.01, value=0.40, label="Dark bg mix (t_dark)")
+    mix_amount_light = mo.ui.number(start=0.0, stop=1.0, step=0.01, value=0.12, label="Light bg mix (t_light)")
+    mix_amount_dark = mo.ui.number(start=0.0, stop=1.0, step=0.01, value=0.35, label="Dark bg mix (t_dark)")
 
     min_lc_vs_bg = mo.ui.number(start=15, stop=105, step=1, value=60, label="Min |Lc| vs background")
-    min_lc_vs_font = mo.ui.number(start=15, stop=105, step=1, value=30, label="Min |Lc| vs existing font")
+    min_lc_vs_font = mo.ui.number(start=0, stop=105, step=1, value=10, label="Min |Lc| vs existing font")
     max_hue_dev = mo.ui.number(start=0, stop=60, step=1, value=20, label="Max hue dev (deg)")
     chroma_cap = mo.ui.number(start=0.02, stop=0.35, step=0.01, value=0.18, label="Chroma ceiling")
+    num_candidates = mo.ui.number(start=1, stop=10, step=1, value=4, label="Max candidates shown")
+
     return (
         D_bg_input,
         Fd_input,
         Fl_input,
         L_bg_input,
+        base_color_2_input,
+        base_color_3_input,
+        base_color_4_input,
+        base_color_5_input,
+        base_color_6_input,
         base_color_input,
         chroma_cap,
         max_hue_dev,
@@ -373,6 +511,9 @@ def _(ColorPicker, mo):
         mix_amount_dark,
         mix_amount_light,
         mix_mode,
+        num_base_colors,
+        num_candidates,
+        reset_theme_btn,
     )
 
 
@@ -383,6 +524,11 @@ def _(
     Fl_input,
     L_bg_input,
     apca_contrast,
+    base_color_2_input,
+    base_color_3_input,
+    base_color_4_input,
+    base_color_5_input,
+    base_color_6_input,
     base_color_input,
     chroma_cap,
     get_hex,
@@ -397,10 +543,15 @@ def _(
     mix_mode,
     mix_oklab,
     mo,
+    np,
+    num_base_colors,
+    num_candidates,
     oklch_to_srgb_hex,
+    reset_theme_btn,
+    solve_simultaneous_link_colors,
     swatch,
 ):
-    import numpy as np
+    # numpy imported in Hbol
 
     B = get_hex(base_color_input.value)
     L = get_hex(L_bg_input.value)
@@ -426,12 +577,40 @@ def _(
     Lb = mix_oklab(L, B, t_light)
     Db = mix_oklab(D, B, t_dark)
 
+    # --- N Base Colors & Simultaneous Link Color Optimization ---
+    N_base = int(num_base_colors.value)
+    base_inputs_all = [base_color_input, base_color_2_input, base_color_3_input, base_color_4_input, base_color_5_input, base_color_6_input]
+    base_colors_hex = [get_hex(base_inputs_all[i].value) for i in range(N_base)]
+
+    # Derive backgrounds for all N base colors
+    derived_Lb_list = [mix_oklab(L, b_hex, t_light) for b_hex in base_colors_hex]
+    derived_Db_list = [mix_oklab(D, b_hex, t_dark) for b_hex in base_colors_hex]
+
+    all_light_bgs = [L] + derived_Lb_list
+    all_dark_bgs = [D] + derived_Db_list
+
+    all_light_bg_labels = ["Original Light BG (L)"] + [f"Derived Light BG Lb{i+1} (Base {i+1}: {base_colors_hex[i]})" for i in range(N_base)]
+    all_dark_bg_labels = ["Original Dark BG (D)"] + [f"Derived Dark BG Db{i+1} (Base {i+1}: {base_colors_hex[i]})" for i in range(N_base)]
+
+    # Simultaneous link color optimization for Light and Dark sides
+    opt_light_links = solve_simultaneous_link_colors(
+        base_colors_hex, all_light_bgs, Fl, is_light=True,
+        min_lc_bg=min_lc_vs_bg.value, min_lc_text=min_lc_vs_font.value,
+        max_hue_dev=max_hue_dev.value, c_max=chroma_cap.value
+    )
+
+    opt_dark_links = solve_simultaneous_link_colors(
+        base_colors_hex, all_dark_bgs, Fd, is_light=False,
+        min_lc_bg=min_lc_vs_bg.value, min_lc_text=min_lc_vs_font.value,
+        max_hue_dev=max_hue_dev.value, c_max=chroma_cap.value
+    )
+
     def color_info(hexv):
         L_, C_, H_ = hex_to_oklch(hexv)
         r, g, b = hex_to_rgb255(hexv)
         return f"`{hexv}` | L:{L_:.2f} C:{C_:.2f} H:{H_:.0f}° | RGB: {r}, {g}, {b}"
 
-    def search_font_color(bg_hex, existing_font_hex, base_hex, lc_bg_min, lc_font_min, hue_dev_max, c_max, n_L=25, n_C=12, n_H=9):
+    def search_font_color(bg_hex, existing_font_hex, base_hex, lc_bg_min, lc_font_min, hue_dev_max, c_max, max_cands=4, n_L=25, n_C=12, n_H=9):
         L_b, C_b, H_b = hex_to_oklch(base_hex)
         bg_rgb = hex_to_rgb255(bg_hex)
         font_rgb = hex_to_rgb255(existing_font_hex)
@@ -448,7 +627,7 @@ def _(
                         dist_to_B = ((L_ - L_b) ** 2 + (C_ - C_b) ** 2 + (min(abs(dH), 360 - abs(dH)) / 100) ** 2) ** 0.5
                         candidates.append((dist_to_B, hexv, L_, C_, H_, lc_bg, lc_font, clipped))
         candidates.sort(key=lambda x: x[0])
-    
+
         seen_hex = set()
         unique_candidates = []
         selected_lch = []
@@ -456,7 +635,7 @@ def _(
             dist, hexv, L_, C_, H_, lc_bg, lc_font, clipped = cand
             if hexv in seen_hex:
                 continue
-        
+    
             too_close = False
             for prev_L, prev_C, prev_H in selected_lch:
                 dH_val = abs(H_ - prev_H) % 360
@@ -465,46 +644,71 @@ def _(
                 if lch_diff < 0.03:
                     too_close = True
                     break
-        
+    
             if not too_close:
                 seen_hex.add(hexv)
                 selected_lch.append((L_, C_, H_))
                 unique_candidates.append(cand)
-                if len(unique_candidates) == 8:
+                if len(unique_candidates) == max_cands:
                     break
 
-        if len(unique_candidates) < 8:
+        if len(unique_candidates) < max_cands:
             for cand in candidates:
                 hexv = cand[1]
                 if hexv not in seen_hex:
                     seen_hex.add(hexv)
                     unique_candidates.append(cand)
-                    if len(unique_candidates) == 8:
+                    if len(unique_candidates) == max_cands:
                         break
 
         return unique_candidates
 
-    light_candidates = search_font_color(Lb, Fl, B, min_lc_vs_bg.value, min_lc_vs_font.value, max_hue_dev.value, chroma_cap.value)
-    dark_candidates = search_font_color(Db, Fd, B, min_lc_vs_bg.value, min_lc_vs_font.value, max_hue_dev.value, chroma_cap.value)
+    light_candidates = search_font_color(Lb, Fl, B, min_lc_vs_bg.value, min_lc_vs_font.value, max_hue_dev.value, chroma_cap.value, max_cands=int(num_candidates.value))
+    dark_candidates = search_font_color(Db, Fd, B, min_lc_vs_bg.value, min_lc_vs_font.value, max_hue_dev.value, chroma_cap.value, max_cands=int(num_candidates.value))
 
     def render_candidates(cands, bg_hex, existing_font_hex, title):
         if not cands:
-            return mo.md(f"**{title}**: no candidates satisfy the current thresholds.")
+            return mo.md(
+                f"#### {title}\n"
+                f"*No candidates satisfy the current threshold constraints against background `{bg_hex}` and font `{existing_font_hex}`. "
+                f"Try lowering **min |Lc| vs font** or widening **max hue dev**.*"
+            )
+
         rows = []
-        for dist, hexv, L_, C_, H_, lc_bg, lc_font, clipped in cands:
-            r, g, b = hex_to_rgb255(hexv)
-            swatch_html = f'<div style="display:inline-block;width:160px;height:40px;background:{bg_hex};color:{hexv};padding:10px;font-weight:600;border:1px solid #888;border-radius:4px;text-align:center;line-height:20px;">Sample Text</div>'
-            info = f"`{hexv}`  |  OKLCH: {L_:.2f}, {C_:.2f}, {H_:.0f}°  |  RGB: {r}, {g}, {b}<br>Lc(bg)={lc_bg:.0f}  |  Lc(font)={lc_font:.0f} {'<span style="color:red">[gamut-clipped]</span>' if clipped else ''}"
-            rows.append(mo.hstack([mo.Html(swatch_html), mo.md(info)]))
-        return mo.vstack([mo.md(f"**{title}** (against `{bg_hex}` and font `{existing_font_hex}`):"), *rows])
+        for idx, (dist, hexv, L_, C_, H_, lc_bg, lc_font, clipped) in enumerate(cands, 1):
+            clip_str = "**[clipped]**" if clipped else "In gamut"
+            rows.append(
+                f"| **#{idx}** | `{hexv}` | `{L_:.2f}, {C_:.2f}, {H_:.0f}°` | `{abs(lc_bg):.0f}` | `{abs(lc_font):.0f}` | {clip_str} |"
+            )
+    
+        table_header = "| Rank | Hex | OKLCH (L, C, H) | Lc(bg) | Lc(font) | Gamut |\n| :---: | :--- | :--- | :---: | :---: | :---: |\n"
+        return mo.md(table_header + "\n".join(rows))
+
+    base_controls_ui = [
+        mo.md("#### Base Color Sliders (Resettable)"),
+        mo.hstack([mo.md("**Base Color 1 (B1):**"), base_color_input, swatch(B, 30, 20)]),
+    ]
+    if N_base >= 2:
+        base_controls_ui.append(mo.hstack([mo.md("**Base Color 2 (B2):**"), base_color_2_input, swatch(get_hex(base_color_2_input.value), 30, 20)]))
+    if N_base >= 3:
+        base_controls_ui.append(mo.hstack([mo.md("**Base Color 3 (B3):**"), base_color_3_input, swatch(get_hex(base_color_3_input.value), 30, 20)]))
+    if N_base >= 4:
+        base_controls_ui.append(mo.hstack([mo.md("**Base Color 4 (B4):**"), base_color_4_input, swatch(get_hex(base_color_4_input.value), 30, 20)]))
+    if N_base >= 5:
+        base_controls_ui.append(mo.hstack([mo.md("**Base Color 5 (B5):**"), base_color_5_input, swatch(get_hex(base_color_5_input.value), 30, 20)]))
+    if N_base >= 6:
+        base_controls_ui.append(mo.hstack([mo.md("**Base Color 6 (B6):**"), base_color_6_input, swatch(get_hex(base_color_6_input.value), 30, 20)]))
 
     ui_inputs = mo.vstack([
-        mo.md("### 1. Theme Colors"),
-        mo.hstack([mo.md("**Base color B:**"), base_color_input, swatch(B, 30, 20), mo.md(color_info(B))]),
-        mo.hstack([mo.md("**Light bg L:**"), L_bg_input, swatch(L, 30, 20), mo.md(color_info(L))]),
-        mo.hstack([mo.md("**Dark bg D:**"), D_bg_input, swatch(D, 30, 20), mo.md(color_info(D))]),
-        mo.hstack([mo.md("**Light font Fl:**"), Fl_input, swatch(Fl, 30, 20), mo.md(color_info(Fl))]),
-        mo.hstack([mo.md("**Dark font Fd:**"), Fd_input, swatch(Fd, 30, 20), mo.md(color_info(Fd))]),
+        mo.md("### 1. Theme & Base Color Controls"),
+        reset_theme_btn,
+        mo.hstack([mo.md("**Light bg (L):**"), L_bg_input, swatch(L, 30, 20)]),
+        mo.hstack([mo.md("**Dark bg (D):**"), D_bg_input, swatch(D, 30, 20)]),
+        mo.hstack([mo.md("**Light font (Fl):**"), Fl_input, swatch(Fl, 30, 20)]),
+        mo.hstack([mo.md("**Dark font (Fd):**"), Fd_input, swatch(Fd, 30, 20)]),
+        mo.md("---"),
+        num_base_colors,
+        *base_controls_ui
     ])
 
     _mix_controls = [mix_mode]
@@ -514,41 +718,48 @@ def _(
         _mix_controls.append(mix_amount)
 
     ui_sliders = mo.vstack([
-        mo.md("### 2. Constraints & Mix Mode"),
+        mo.md("### 2. Mix & Optimization Constraints"),
         *_mix_controls,
         min_lc_vs_bg,
         min_lc_vs_font,
         max_hue_dev,
-        chroma_cap
+        chroma_cap,
+        num_candidates
     ])
 
     ui_mixed = mo.hstack([
         mo.vstack([
-            mo.md(f"**Lb** (New Light Bg, t={t_light:.2f})"),
+            mo.md(f"**Lb** (New Light Bg 1, t={t_light:.2f})"),
             swatch(Lb, 140, 50),
             mo.md(color_info(Lb))
         ]),
         mo.vstack([
-            mo.md(f"**Db** (New Dark Bg, t={t_dark:.2f})"),
+            mo.md(f"**Db** (New Dark Bg 1, t={t_dark:.2f})"),
             swatch(Db, 140, 50),
             mo.md(color_info(Db))
         ]),
     ])
 
+    light_candidates_view = render_candidates(light_candidates, Lb, Fl, "Light-Side Font Candidates")
+    dark_candidates_view = render_candidates(dark_candidates, Db, Fd, "Dark-Side Font Candidates")
+
     ui_font_results = mo.vstack([
-        mo.md("### 4. Font Color Candidates"),
-        render_candidates(light_candidates, Lb, Fl, "Light-side new font colors"),
-        render_candidates(dark_candidates, Db, Fd, "Dark-side new font colors"),
+        mo.md("### Single-Base Candidate Inspection"),
+        mo.ui.tabs({
+            "Light-Side Font Candidates": light_candidates_view,
+            "Dark-Side Font Candidates": dark_candidates_view
+        })
     ])
 
     dashboard = mo.vstack([
         mo.hstack([ui_inputs, ui_sliders], justify="start", gap=4),
         mo.md("---"),
-        mo.md("### 3. Background Comparison (Original vs Base-Mixed)"),
+        mo.md("### 3. Background Comparison"),
         ui_mixed,
         mo.md("---"),
         ui_font_results
     ])
+
     return (
         D,
         Db,
@@ -556,8 +767,14 @@ def _(
         Fl,
         L,
         Lb,
+        all_dark_bg_labels,
+        all_dark_bgs,
+        all_light_bg_labels,
+        all_light_bgs,
+        base_colors_hex,
         color_info,
-        np,
+        opt_dark_links,
+        opt_light_links,
         t_dark,
         t_light,
         ui_font_results,
@@ -574,21 +791,114 @@ def _(
     Fl,
     L,
     Lb,
+    all_dark_bg_labels,
+    all_dark_bgs,
+    all_light_bg_labels,
+    all_light_bgs,
     apca_contrast,
+    base_colors_hex,
     color_info,
     hex_to_rgb255,
     mo,
+    opt_dark_links,
+    opt_light_links,
     t_dark,
     t_light,
     ui_font_results,
     ui_inputs,
     ui_sliders,
 ):
+    def build_multi_base_display(all_light_bgs, all_light_bg_labels, opt_light_links, Fl,
+                                 all_dark_bgs, all_dark_bg_labels, opt_dark_links, Fd,
+                                 base_colors_hex):
+        light_cards = []
+        for bg_hex, bg_label in zip(all_light_bgs, all_light_bg_labels):
+            bg_rgb = hex_to_rgb255(bg_hex)
+            lc_norm_text = abs(apca_contrast(hex_to_rgb255(Fl), bg_rgb))
+        
+            link_items = []
+            for i, link_info in enumerate(opt_light_links, 1):
+                k_hex = link_info['hex']
+                lc_link = abs(apca_contrast(hex_to_rgb255(k_hex), bg_rgb))
+                b_hex = base_colors_hex[i-1]
+                link_items.append(
+                    f'<a href="#" onclick="return false;" style="color:{k_hex}; text-decoration:underline; font-weight:700; font-size:14px; margin:0 6px;">'
+                    f'Link {i} ({b_hex}) <span style="font-size:11px; opacity:0.85; font-weight:normal;">[Lc: {lc_link:.0f}]</span></a>'
+                )
+            links_html = " &nbsp;•&nbsp; ".join(link_items)
+        
+            light_cards.append(f'''
+            <div style="background:{bg_hex}; color:{Fl}; padding:14px 18px; border-radius:6px; border:1px solid #777; margin:8px 0; font-family:system-ui, sans-serif;">
+                <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px; opacity:0.8;">
+                    {bg_label} &nbsp;|&nbsp; Hex: <code>{bg_hex}</code> &nbsp;|&nbsp; Normal Text Lc: <b>{lc_norm_text:.0f}</b>
+                </div>
+                <div style="font-size:14px; line-height:1.8;">
+                    Normal body text in <code>{Fl}</code>. &nbsp;|&nbsp; Link colors: {links_html}
+                </div>
+            </div>
+            ''')
+
+        dark_cards = []
+        for bg_hex, bg_label in zip(all_dark_bgs, all_dark_bg_labels):
+            bg_rgb = hex_to_rgb255(bg_hex)
+            lc_norm_text = abs(apca_contrast(hex_to_rgb255(Fd), bg_rgb))
+        
+            link_items = []
+            for i, link_info in enumerate(opt_dark_links, 1):
+                k_hex = link_info['hex']
+                lc_link = abs(apca_contrast(hex_to_rgb255(k_hex), bg_rgb))
+                b_hex = base_colors_hex[i-1]
+                link_items.append(
+                    f'<a href="#" onclick="return false;" style="color:{k_hex}; text-decoration:underline; font-weight:700; font-size:14px; margin:0 6px;">'
+                    f'Link {i} ({b_hex}) <span style="font-size:11px; opacity:0.85; font-weight:normal;">[Lc: {lc_link:.0f}]</span></a>'
+                )
+            links_html = " &nbsp;•&nbsp; ".join(link_items)
+        
+            dark_cards.append(f'''
+            <div style="background:{bg_hex}; color:{Fd}; padding:14px 18px; border-radius:6px; border:1px solid #777; margin:8px 0; font-family:system-ui, sans-serif;">
+                <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px; opacity:0.8;">
+                    {bg_label} &nbsp;|&nbsp; Hex: <code>{bg_hex}</code> &nbsp;|&nbsp; Normal Text Lc: <b>{lc_norm_text:.0f}</b>
+                </div>
+                <div style="font-size:14px; line-height:1.8;">
+                    Normal body text in <code>{Fd}</code>. &nbsp;|&nbsp; Link colors: {links_html}
+                </div>
+            </div>
+            ''')
+
+        rows = []
+        for i in range(len(base_colors_hex)):
+            b_hex = base_colors_hex[i]
+            l_info = opt_light_links[i]
+            d_info = opt_dark_links[i]
+        
+            l_clip = '**[clipped]**' if l_info['clipped'] else 'In gamut'
+            d_clip = '**[clipped]**' if d_info['clipped'] else 'In gamut'
+        
+            rows.append(
+                f"| **Base {i+1}** (`{b_hex}`) | `{l_info['hex']}` | `L:{l_info['L']:.2f}, C:{l_info['C']:.2f}, H:{l_info['H']:.0f}°` | `{l_info['hue_dev']:.1f}°` | `{l_info['min_lc_bg']:.0f}` | `{l_info['lc_text']:.0f}` | {l_clip} | `{d_info['hex']}` | `L:{d_info['L']:.2f}, C:{d_info['C']:.2f}, H:{d_info['H']:.0f}°` | `{d_info['hue_dev']:.1f}°` | `{d_info['min_lc_bg']:.0f}` | `{d_info['lc_text']:.0f}` | {d_clip} |"
+            )
+        
+        table_header = (
+            "| Base Color | Light Link Hex | Light OKLCH | ΔH(Base) | Min Lc(bg) | Lc(text) | Light Gamut | Dark Link Hex | Dark OKLCH | ΔH(Base) | Min Lc(bg) | Lc(text) | Dark Gamut |\n"
+            "| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :--- | :--- | :---: | :---: | :---: | :---: |\n"
+        )
+    
+        table_md = mo.md(table_header + "\n".join(rows))
+    
+        return mo.vstack([
+            mo.md("### 4. Simultaneous N-Base Link Color Optimization Results"),
+            table_md,
+            mo.md("#### Light Background Swatches & Link Text Samples"),
+            mo.Html("\n".join(light_cards)),
+            mo.md("#### Dark Background Swatches & Link Text Samples"),
+            mo.Html("\n".join(dark_cards)),
+        ])
+
     def _make_stacked_bg_comparison(title, top_label, top_hex, bot_label, bot_hex, font_hex, font_label, w=340, h=120):
         font_rgb = hex_to_rgb255(font_hex)
         lc_top = abs(apca_contrast(font_rgb, hex_to_rgb255(top_hex)))
         lc_bot = abs(apca_contrast(font_rgb, hex_to_rgb255(bot_hex)))
-    
+
         swatch_html = f'''
         <div style="width:{w}px; height:{h}px; border:1px solid #888; border-radius:6px; overflow:hidden; display:flex; flex-direction:column; margin: 6px 0; font-family: system-ui, sans-serif;">
             <div style="flex:1; background:{top_hex}; color:{font_hex}; width:100%; display:flex; align-items:center; justify-content:center; font-weight:600; font-size: 14px; box-sizing:border-box;">
@@ -612,11 +922,19 @@ def _(
         _make_stacked_bg_comparison("Dark Side (D vs Db)", "D (Original)", D, f"Db (New Base-Mixed, t={t_dark:.2f})", Db, Fd, "Fd"),
     ], justify="start", gap=6)
 
+    multi_base_display = build_multi_base_display(
+        all_light_bgs, all_light_bg_labels, opt_light_links, Fl,
+        all_dark_bgs, all_dark_bg_labels, opt_dark_links, Fd,
+        base_colors_hex
+    )
+
     _dashboard = mo.vstack([
         mo.hstack([ui_inputs, ui_sliders], justify="start", gap=4),
         mo.md("---"),
-        mo.md("### 3. Background Comparison (Original vs Base-Mixed)"),
+        mo.md("### 3. Primary Background Comparison"),
         ui_bg_comparison,
+        mo.md("---"),
+        multi_base_display,
         mo.md("---"),
         ui_font_results,
     ])
@@ -689,11 +1007,80 @@ def _(
         d = abs(h1 - h2) % 360
         return min(d, 360 - d)
 
+    def render_triple_results(hues, title="Optimal Highlight Triple Results"):
+        hues = list(hues)
+        sep_list = [
+            hue_sep(hues[0], hues[1]),
+            hue_sep(hues[1], hues[2]),
+            hue_sep(hues[0], hues[2])
+        ]
+        min_sep = min(sep_list)
+
+        db_rgb = hex_to_rgb255(Db)
+        lb_rgb = hex_to_rgb255(Lb)
+        fd_rgb = hex_to_rgb255(Fd)
+        fl_rgb = hex_to_rgb255(Fl)
+
+        triple_data = []
+        for h in hues:
+            hex_d, rgb_d, clip_d = oklch_to_srgb_hex(hl_lightness_dark.value, hl_chroma.value, h)
+            hex_l, rgb_l, clip_l = oklch_to_srgb_hex(hl_lightness_light.value, hl_chroma.value, h)
+            lc_d = apca_contrast(rgb_d, db_rgb)
+            lc_l = apca_contrast(rgb_l, lb_rgb)
+            lc_font_d = apca_contrast(fd_rgb, rgb_d)
+            lc_font_l = apca_contrast(fl_rgb, rgb_l)
+            triple_data.append((h, hex_d, hex_l, lc_d, lc_l, lc_font_d, lc_font_l, clip_d, clip_l))
+
+        hl_spans_light = [
+            f'<span style="background:{hex_l}; color:{Fl}; padding:3px 8px; border-radius:4px; font-weight:600; margin:0 4px; border:1px solid rgba(0,0,0,0.15);">Highlight {i} ({h:.1f}°)</span>'
+            for i, (h, _, hex_l, _, _, _, _, _, _) in enumerate(triple_data, 1)
+        ]
+        light_html = f'''
+        <div style="width:100%; background:{Lb}; color:{Fl}; padding:14px 18px; border:1px solid #777; border-radius:6px; font-family:system-ui, sans-serif; font-size:14px; line-height:2.2; box-sizing:border-box; margin:4px 0;">
+            <strong>Light Theme (Lb):</strong> Body text before {hl_spans_light[0]} body text between {hl_spans_light[1]} body text between {hl_spans_light[2]} body text after.
+        </div>
+        '''
+
+        hl_spans_dark = [
+            f'<span style="background:{hex_d}; color:{Fd}; padding:3px 8px; border-radius:4px; font-weight:600; margin:0 4px; border:1px solid rgba(255,255,255,0.15);">Highlight {i} ({h:.1f}°)</span>'
+            for i, (h, hex_d, _, _, _, _, _, _, _) in enumerate(triple_data, 1)
+        ]
+        dark_html = f'''
+        <div style="width:100%; background:{Db}; color:{Fd}; padding:14px 18px; border:1px solid #777; border-radius:6px; font-family:system-ui, sans-serif; font-size:14px; line-height:2.2; box-sizing:border-box; margin:4px 0;">
+            <strong>Dark Theme (Db):</strong> Body text before {hl_spans_dark[0]} body text between {hl_spans_dark[1]} body text between {hl_spans_dark[2]} body text after.
+        </div>
+        '''
+
+        table_rows = []
+        for i, (h, hex_d, hex_l, lc_d, lc_l, lc_font_d, lc_font_l, clip_d, clip_l) in enumerate(triple_data, 1):
+            if clip_d and clip_l:
+                clip_note = '**[clipped (both)]**'
+            elif clip_d:
+                clip_note = '**[clipped (dark)]**'
+            elif clip_l:
+                clip_note = '**[clipped (light)]**'
+            else:
+                clip_note = 'In gamut'
+
+            table_rows.append(
+                f"| **Highlight {i}** | `{h:.1f}°` | `{hex_d}` | `{abs(lc_d):.0f}` | `{abs(lc_font_d):.0f}` | `{hex_l}` | `{abs(lc_l):.0f}` | `{abs(lc_font_l):.0f}` | {clip_note} |"
+            )
+
+        table_header = "| Highlight | Hue (H) | Dark Hex | Lc(bg) | Lc(font) | Light Hex | Lc(bg) | Lc(font) | Gamut Notes |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+        table_md = mo.md(table_header + "\n".join(table_rows))
+
+        return mo.vstack([
+            mo.md(f"### {title}"),
+            mo.md(f"**Minimum Pairwise Hue Separation:** `{min_sep:.1f}°` (Separations: `{sep_list[0]:.1f}°`, `{sep_list[1]:.1f}°`, `{sep_list[2]:.1f}°`)"),
+            mo.Html(light_html),
+            mo.Html(dark_html),
+            mo.md("**Color Parameters & APCA Contrast Metrics:**"),
+            table_md
+        ], gap=1)
+
     hue_grid = np.linspace(0, 360, 36, endpoint=False)
     db_rgb = hex_to_rgb255(Db)
     lb_rgb = hex_to_rgb255(Lb)
-    fd_rgb = hex_to_rgb255(Fd)
-    fl_rgb = hex_to_rgb255(Fl)
 
     valid_hues = []
     for h in hue_grid:
@@ -721,57 +1108,10 @@ def _(
             "**min hue separation** or **min Lc**, or raising chroma."
         )
     else:
-        triple_data = [(c[0], c[1], c[2], c[3], c[4]) for c in best_triple]
-        hues = [t[0] for t in triple_data]
-        sep_list = [hue_sep(hues[0], hues[1]), hue_sep(hues[1], hues[2]), hue_sep(hues[0], hues[2])]
-    
-        hl_spans_light = []
-        for idx, (h, hex_d, hex_l, lc_d, lc_l) in enumerate(triple_data, 1):
-            hl_spans_light.append(
-                f'<span style="background:{hex_l}; color:{Fl}; padding:3px 8px; border-radius:4px; font-weight:600; margin: 0 4px; border:1px solid rgba(0,0,0,0.15);">Highlight {idx} ({h:.0f}°)</span>'
-            )
-        light_triple_html = f'''
-        <div style="width:100%; background:{Lb}; color:{Fl}; padding:14px 18px; border:1px solid #777; border-radius:6px; font-family:system-ui, sans-serif; font-size:14px; line-height:2.2; box-sizing:border-box; margin: 4px 0;">
-            <strong>Light Theme (Lb):</strong> Body text before {hl_spans_light[0]} body text between {hl_spans_light[1]} body text between {hl_spans_light[2]} body text after.
-        </div>
-        '''
-
-        hl_spans_dark = []
-        for idx, (h, hex_d, hex_l, lc_d, lc_l) in enumerate(triple_data, 1):
-            hl_spans_dark.append(
-                f'<span style="background:{hex_d}; color:{Fd}; padding:3px 8px; border-radius:4px; font-weight:600; margin: 0 4px; border:1px solid rgba(255,255,255,0.15);">Highlight {idx} ({h:.0f}°)</span>'
-            )
-        dark_triple_html = f'''
-        <div style="width:100%; background:{Db}; color:{Fd}; padding:14px 18px; border:1px solid #777; border-radius:6px; font-family:system-ui, sans-serif; font-size:14px; line-height:2.2; box-sizing:border-box; margin: 4px 0;">
-            <strong>Dark Theme (Db):</strong> Body text before {hl_spans_dark[0]} body text between {hl_spans_dark[1]} body text between {hl_spans_dark[2]} body text after.
-        </div>
-        '''
-
-        table_rows = []
-        for idx, (h, hex_d, hex_l, lc_d, lc_l) in enumerate(triple_data, 1):
-            rgb_d = hex_to_rgb255(hex_d)
-            rgb_l = hex_to_rgb255(hex_l)
-            lc_font_d = abs(apca_contrast(fd_rgb, rgb_d))
-            lc_font_l = abs(apca_contrast(fl_rgb, rgb_l))
-        
-            table_rows.append(
-                f"| **Highlight {idx}** | `{h:.1f}°` | `{hex_d}` | `{abs(lc_d):.0f}` | `{lc_font_d:.0f}` | `{hex_l}` | `{abs(lc_l):.0f}` | `{lc_font_l:.0f}` |"
-            )
-        
-        table_header = "| Highlight | Hue (H) | Dark Hex | Lc(bg) | Lc(font) | Light Hex | Lc(bg) | Lc(font) |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-        table_md = mo.md(table_header + "\n".join(table_rows))
-
-        triple_result = mo.vstack([
-            mo.md(f"### Grid Search Optimal Triple"),
-            mo.md(f"**Minimum Pairwise Hue Separation:** `{best_score:.1f}°` (Separations: `{sep_list[0]:.1f}°`, `{sep_list[1]:.1f}°`, `{sep_list[2]:.1f}°`)"),
-            mo.Html(light_triple_html),
-            mo.Html(dark_triple_html),
-            mo.md("**Color Parameters & APCA Contrast Metrics:**"),
-            table_md
-        ], gap=1)
+        triple_result = render_triple_results([c[0] for c in best_triple], title="Grid Search Optimal Triple")
 
     triple_result
-    return (hue_sep,)
+    return hue_sep, render_triple_results
 
 
 @app.cell(hide_code=True)
@@ -806,35 +1146,36 @@ def _(
     def _de_objective(params):
         h1, h2, h3 = params
         hues = [h1, h2, h3]
-    
+
         # 1. Minimum pairwise hue separation
         seps = [hue_sep(hues[i], hues[j]) for i in range(3) for j in range(i + 1, 3)]
         min_sep = min(seps)
-    
+
         # 2. Penalty terms for APCA contrast and gamut bounds
         target_lc = hl_min_lc.value
         penalty = 0.0
-    
+
         db_rgb_local = hex_to_rgb255(Db)
         lb_rgb_local = hex_to_rgb255(Lb)
-    
+
         for h in hues:
             _, rgb_d, clipped_d = oklch_to_srgb_hex(hl_lightness_dark.value, hl_chroma.value, h)
             _, rgb_l, clipped_l = oklch_to_srgb_hex(hl_lightness_light.value, hl_chroma.value, h)
-        
+    
             lc_d = abs(apca_contrast(rgb_d, db_rgb_local))
             lc_l = abs(apca_contrast(rgb_l, lb_rgb_local))
-        
+    
             if lc_d < target_lc:
                 penalty += (target_lc - lc_d) ** 2 * 10.0
             if lc_l < target_lc:
                 penalty += (target_lc - lc_l) ** 2 * 10.0
-            
+        
+            # Soft penalty for gamut clipping so hue separation remains prioritized
             if clipped_d:
-                penalty += 100.0
+                penalty += 0.2
             if clipped_l:
-                penalty += 100.0
-            
+                penalty += 0.2
+        
         return -min_sep + penalty
 
     def _run_differential_evolution(objective, bounds, seed=42, maxiter=100, popsize=15):
@@ -843,13 +1184,13 @@ def _(
         pop_n = popsize * n_dim
         lb = np.array([b[0] for b in bounds])
         ub = np.array([b[1] for b in bounds])
-    
+
         pop = rng.uniform(lb, ub, size=(pop_n, n_dim))
         fitness = np.array([objective(ind) for ind in pop])
-    
+
         F = 0.8
         CR = 0.7
-    
+
         for _ in range(maxiter):
             for i in range(pop_n):
                 idxs = [idx for idx in range(pop_n) if idx != i]
@@ -885,85 +1226,12 @@ def _(
         hue_sep(optimized_hues[0], optimized_hues[2])
     ]
     min_opt_sep = min(optimized_seps)
-    return min_opt_sep, optimized_hues, optimized_seps
+    return (optimized_hues,)
 
 
 @app.cell(hide_code=True)
-def _(
-    Db,
-    Fd,
-    Fl,
-    Lb,
-    apca_contrast,
-    hex_to_rgb255,
-    hl_chroma,
-    hl_lightness_dark,
-    hl_lightness_light,
-    min_opt_sep,
-    mo,
-    oklch_to_srgb_hex,
-    optimized_hues,
-    optimized_seps,
-):
-    _db_rgb = hex_to_rgb255(Db)
-    _lb_rgb = hex_to_rgb255(Lb)
-    _fd_rgb = hex_to_rgb255(Fd)
-    _fl_rgb = hex_to_rgb255(Fl)
-
-    _de_triple_data = []
-    for _h in optimized_hues:
-        _hex_d, _rgb_d, _clip_d = oklch_to_srgb_hex(hl_lightness_dark.value, hl_chroma.value, _h)
-        _hex_l, _rgb_l, _clip_l = oklch_to_srgb_hex(hl_lightness_light.value, hl_chroma.value, _h)
-        _lc_d = apca_contrast(_rgb_d, _db_rgb)
-        _lc_l = apca_contrast(_rgb_l, _lb_rgb)
-        _de_triple_data.append((_h, _hex_d, _hex_l, _lc_d, _lc_l, _clip_d, _clip_l))
-
-    _hl_spans_light = []
-    for _idx, (_h, _hex_d, _hex_l, _lc_d, _lc_l, _clip_d, _clip_l) in enumerate(_de_triple_data, 1):
-        _hl_spans_light.append(
-            f'<span style="background:{_hex_l}; color:{Fl}; padding:3px 8px; border-radius:4px; font-weight:600; margin: 0 4px; border:1px solid rgba(0,0,0,0.15);">Highlight {_idx} ({_h:.1f}°)</span>'
-        )
-    _light_triple_html = f'''
-    <div style="width:100%; background:{Lb}; color:{Fl}; padding:14px 18px; border:1px solid #777; border-radius:6px; font-family:system-ui, sans-serif; font-size:14px; line-height:2.2; box-sizing:border-box; margin: 4px 0;">
-        <strong>Light Theme (Lb):</strong> Body text before {_hl_spans_light[0]} body text between {_hl_spans_light[1]} body text between {_hl_spans_light[2]} body text after.
-    </div>
-    '''
-
-    _hl_spans_dark = []
-    for _idx, (_h, _hex_d, _hex_l, _lc_d, _lc_l, _clip_d, _clip_l) in enumerate(_de_triple_data, 1):
-        _hl_spans_dark.append(
-            f'<span style="background:{_hex_d}; color:{Fd}; padding:3px 8px; border-radius:4px; font-weight:600; margin: 0 4px; border:1px solid rgba(255,255,255,0.15);">Highlight {_idx} ({_h:.1f}°)</span>'
-        )
-    _dark_triple_html = f'''
-    <div style="width:100%; background:{Db}; color:{Fd}; padding:14px 18px; border:1px solid #777; border-radius:6px; font-family:system-ui, sans-serif; font-size:14px; line-height:2.2; box-sizing:border-box; margin: 4px 0;">
-        <strong>Dark Theme (Db):</strong> Body text before {_hl_spans_dark[0]} body text between {_hl_spans_dark[1]} body text between {_hl_spans_dark[2]} body text after.
-    </div>
-    '''
-
-    _table_rows = []
-    for _idx, (_h, _hex_d, _hex_l, _lc_d, _lc_l, _clip_d, _clip_l) in enumerate(_de_triple_data, 1):
-        _rgb_d = hex_to_rgb255(_hex_d)
-        _rgb_l = hex_to_rgb255(_hex_l)
-        _lc_font_d = abs(apca_contrast(_fd_rgb, _rgb_d))
-        _lc_font_l = abs(apca_contrast(_fl_rgb, _rgb_l))
-        _clip_str = '<span style="color:red">[clipped]</span>' if (_clip_d or _clip_l) else ''
-    
-        _table_rows.append(
-            f"| **Highlight {_idx}** | `{_h:.1f}°` | `{_hex_d}` | `{abs(_lc_d):.0f}` | `{_lc_font_d:.0f}` | `{_hex_l}` | `{abs(_lc_l):.0f}` | `{_lc_font_l:.0f}` | {_clip_str} |"
-        )
-
-    _table_header = "| Highlight | Hue (H) | Dark Hex | Lc(bg) | Lc(font) | Light Hex | Lc(bg) | Lc(font) | Notes |\n| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-    _table_md = mo.md(_table_header + "\n".join(_table_rows))
-
-    de_summary = mo.vstack([
-        mo.md("### Differential Evolution Optimization Results"),
-        mo.md(f"**Minimum Pairwise Hue Separation:** `{min_opt_sep:.1f}°` (Separations: `{optimized_seps[0]:.1f}°`, `{optimized_seps[1]:.1f}°`, `{optimized_seps[2]:.1f}°`)"),
-        mo.Html(_light_triple_html),
-        mo.Html(_dark_triple_html),
-        mo.md("**Color Parameters & APCA Contrast Metrics:**"),
-        _table_md
-    ], gap=1)
-
+def _(optimized_hues, render_triple_results):
+    de_summary = render_triple_results(optimized_hues, title="Differential Evolution Optimization Results")
     de_summary
     return
 
