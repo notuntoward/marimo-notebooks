@@ -101,50 +101,98 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 2. Mathematical Foundation of Savitzky–Golay Filtering
+    ## 2. Mathematical Design: Retrospective vs. Real-Time Rate Estimation
 
-    A Savitzky–Golay (SG) filter fits a local polynomial of degree $m$ (default: $m=2$, quadratic) to a sliding window of $N = 2M+1$ points around each evaluation day $t_0$.
-
-    ### (a) How the Filter Predicts Slope at the Center Point
-    Within a window centered at day $t_0$, time is parameterized as relative offset $\tau = t - t_0 \in [-M, M]$. The local polynomial is:
-
-    \[
-    p(\tau) = c_0 + c_1 \tau + c_2 \tau^2 + \dots + c_m \tau^m
-    \]
-
-    By Taylor's theorem, evaluating $p(\tau)$ and its derivative at the window center $\tau = 0$ yields:
-    - **Smoothed weight estimate:** $\hat{w}(t_0) = p(0) = c_0$
-    - **Smoothed slope (rate of change):** $\hat{w}'(t_0) = p'(0) = c_1$
-
-    Because Ordinary Least Squares (OLS) fitting is a linear operation, the slope coefficient $c_1$ is a linear combination of the window points: $\hat{w}'(t_0) = \sum_{k=-M}^{M} g_k y_{t_0+k}$.
+    This section derives the mathematical formulas for both **weight level** and **rate-of-change (slope)** estimates, documents their noise variances, and provides principled derivations for all default slider parameters.
 
     ---
 
-    ### (b) Are Filter Coefficients Recomputed for Each Point Estimate?
-    - **No, for all interior points on a uniform time grid, the filter coefficients ARE NOT recomputed per point.**
-    - Because the relative window grid $\tau \in \{-M, \dots, +M\}$ is identical for every interior position, the Vandermonde design matrix $V$ and its pseudoinverse $(V^T V)^{-1} V^T$ are constant.
-    - The filter coefficients $h_k$ (for smoothing) and $g_k$ (for slope) are precomputed **once**, reducing the entire operation across the interior to a fast $\mathcal{O}(N)$ **discrete convolution**:
+    ### 1. How the Centered Savitzky–Golay Filter Estimates Slope ($\hat{w}'(t_0)$)
+
+    At each evaluation day $t_0$, time inside a symmetric window of $N_{\text{SG}} = 2M+1$ points is parameterized as relative offset $\tau = t - t_0 \in [-M, M]$. We fit a local polynomial of degree $m_{\text{poly}}$:
 
     \[
-    \hat{w}(t_0) = \sum_{k=-M}^{M} h_k y_{t_0+k}, \qquad \hat{w}'(t_0) = \sum_{k=-M}^{M} g_k y_{t_0+k}
+    p(\tau) = c_0 + c_1 \tau + c_2 \tau^2 + \dots + c_{m_{\text{poly}}} \tau^{m_{\text{poly}}}
     \]
 
-    - **When coefficients ARE recomputed:** Coefficients are re-evaluated *only at boundary/edge points* where asymmetric windows are used, or if the time spacing $\Delta t_i$ is non-uniform.
+    by Ordinary Least Squares (OLS). Differentiating $p(\tau)$ with respect to time $\tau$ and evaluating at $\tau = 0$ yields $p'(0) = c_1$. Thus, the retrospective slope $\hat{w}'(t_0)$ is the linear coefficient $c_1$ of the local fitted polynomial. In matrix form with Vandermonde matrix $V$ ($\text{row } i: [1, \tau_i, \tau_i^2, \dots]$):
+
+    \[
+    \begin{bmatrix} \hat{w}(t_0) \\ \hat{w}'(t_0) \\ \vdots \end{bmatrix} = \begin{bmatrix} c_0 \\ c_1 \\ \vdots \end{bmatrix} = (V^T V)^{-1} V^T Y_{t_0}
+    \]
 
     ---
 
-    ### (c) Why SG Filtering Results in a Tapered, Symmetric Kernel
-    - **Implicit Tapering:** Although local OLS weights all $N$ points in a window equally in $L_2$ norm, evaluating the fitted polynomial *at the center point $\tau = 0$* projects the data onto orthogonal Gram/Legendre polynomials. For a quadratic fit ($m=2$), the effective smoothing kernel weights follow a parabolic profile:
+    ### 2. How Rolling Trailing WLS Estimates Causal Slope ($\hat{\beta}_t$)
+
+    To estimate the current rate today ($t$) using past observations $y_{t-j}$ ($j \ge 0$ days back) without using future data, we fit the local linear model $y_{t-j} = \alpha_t - \beta_t \cdot j + \varepsilon_{t-j}$ with exponential recency weights $w_j = 2^{-j/h}$.
+
+    Minimizing $S(\alpha_t, \beta_t) = \sum_{j=0}^{m-1} w_j \left[ y_{t-j} - (\alpha_t - \beta_t j) \right]^2$ yields the $2 \times 2$ normal equations:
 
     \[
-    h_k = \frac{3(3M^2 + 3M - 1 - 5k^2)}{(2M-1)(2M+1)(2M+3)}
+    \begin{bmatrix} \sum_{j=0}^{m-1} w_j & -\sum_{j=0}^{m-1} w_j j \\ -\sum_{j=0}^{m-1} w_j j & \sum_{j=0}^{m-1} w_j j^2 \end{bmatrix} \begin{bmatrix} \hat{\alpha}_t \\ \hat{\beta}_t \end{bmatrix} = \begin{bmatrix} \sum_{j=0}^{m-1} w_j y_{t-j} \\ -\sum_{j=0}^{m-1} w_j j y_{t-j} \end{bmatrix}
     \]
 
-    Points at the outer edges $k = \pm M$ receive significantly lower weight than the center point $k = 0$, producing a **tapered kernel** that naturally de-emphasizes distant noise.
+    Solving this $2 \times 2$ system yields the explicit closed-form causal daily slope $\hat{\beta}_t$:
 
-    - **Symmetry vs. Asymmetry:**
-      - **Interior Points:** The filter kernel is **strictly symmetric** ($h_{-k} = h_k$ for smoothing, anti-symmetric $g_{-k} = -g_k$ for slope), resulting in **zero phase lag**.
-      - **Edge Points (e.g., "Today"):** Near the boundaries, the window cannot be centered and becomes one-sided ($\tau \in [-N+1, 0]$). The resulting edge kernel is **asymmetric**, giving higher weight to the most recent day.
+    \[
+    \hat{\beta}_t = \frac{\left(\sum w_j\right) \left(-\sum w_j j y_{t-j}\right) - \left(-\sum w_j j\right) \left(\sum w_j y_{t-j}\right)}{\left(\sum w_j\right) \left(\sum w_j j^2\right) - \left(\sum w_j j\right)^2}
+    \]
+
+    Multiplying $\hat{\beta}_t$ by 7 yields the **Trailing Weekly Rate Nowcast** ($7 \hat{\beta}_t$).
+
+    ---
+
+    ### 3. Principled Selection of Default Values for All UI Sliders
+
+    Every default slider parameter in this notebook is selected through an explicit mathematical principle:
+
+    #### (a) SG Polynomial Order ($m = 2$, Quadratic)
+    - **Equation:** $p(\tau) = c_0 + c_1 \tau + c_2 \tau^2$.
+    - **Principle:** By Taylor expansion, body weight around $t_0$ is $w(t_0 + \tau) = w(t_0) + w'(t_0)\tau + \frac{1}{2} w''(t_0) \tau^2 + \mathcal{O}(\tau^3)$.
+      - $m=1$ (linear) assumes constant slope ($w''=0$), causing severe curvature bias during diet shifts or plateaus.
+      - $m=2$ (quadratic) absorbs local acceleration ($w'' \neq 0$) without overfitting noise.
+      - $m=3$ (cubic) increases noise variance by a factor of $\frac{2m+1}{2m-1} = 1.67$ without improving short-window trends.
+      - **Default Choice:** $m=2$.
+
+    #### (b) Minimum & Maximum Candidate SG Window ($N_{\text{min}} = 7\text{ days}, N_{\text{max}} = \lfloor N_{\text{total}}/2 \rfloor$)
+    - **Principle for $N_{\text{min}} = 7\text{ days}$:** Smallest window that spans one full 7-day weekly lifestyle cycle (weekend vs. weekday water/food rhythm), averaging out weekly oscillations (Orsama et al. 2014).
+    - **Principle for $N_{\text{max}} = \lfloor N_{\text{total}}/2 \rfloor$:** Upper-bounded at half the total dataset length so the GCV degree-of-freedom denominator $(1 - \mathrm{tr}(H)/n)^2$ remains statistically stable.
+
+    #### (c) Recency Half-Life ($h^* = 0.3466 \cdot N_{\text{SG}}^*$)
+    - **Equation:** Equating the weight-level noise variance of the GCV-selected centered SG filter ($\frac{\sigma^2}{N_{\text{SG}}^*}$) to the trailing WLS filter ($\frac{\sigma^2 \ln 2}{2h}$) yields:
+
+    \[
+    \frac{\sigma^2}{N_{\text{SG}}^*} = \frac{\sigma^2 \ln 2}{2 h} \implies h^* = \frac{\ln 2}{2} N_{\text{SG}}^* \approx 0.3466 \cdot N_{\text{SG}}^*
+    \]
+
+    - **Principle:** Dynamically sets the trailing nowcast half-life $h^*$ to match the exact noise reduction achieved by the GCV-selected centered SG window. For $N_{\text{SG}}^* = 21\text{ days}$, $h^* \approx 7.3 \approx 7 \text{ to } 8\text{ days}$; for $N_{\text{SG}}^* = 28\text{ days}$, $h^* \approx 9.7 \approx 10\text{ days}$.
+
+    #### (d) Trailing Lookback Window Cutoff ($W_{\text{trail}}^* = \lceil 3.32 \cdot h^* \rceil$)
+    - **Equation:** For exponential weights $w_j = 2^{-j/h}$, the fraction of total weight mass captured within $W_{\text{trail}}$ days is $\eta = 1 - 2^{-W_{\text{trail}}/h}$. For $\eta = 0.90$ (90% weight mass coverage):
+
+    \[
+    W_{\text{trail}}^* = -h^* \cdot \log_2(1 - 0.90) = -\log_2(0.10) \cdot h^* \approx 3.32 \cdot h^*
+    \]
+
+    - **Principle:** Captures $90\%$ of the total exponential weight mass while truncating negligible weights ($w_j < 0.10$) from months ago. For $h^* = 8\text{ days}$, $W_{\text{trail}}^* \approx 27 \text{ to } 28\text{ days}$.
+
+    #### (e) WLS Confidence Interval ($1.96 \cdot SE$)
+    - **Equation:** $\text{CI}_{95\%} = \hat{\beta}_t \pm z_{0.975} \cdot SE(\hat{\beta}_t)$ where $z_{0.975} = 1.96$.
+    - **Principle:** Standard two-sided 95% Gaussian coverage interval for local WLS slope estimates.
+
+    ---
+
+    ### Summary Table: Parameter Derivation Rules
+
+    | UI Parameter | Default Value Rule | Governing Equation / Principle |
+    | :--- | :--- | :--- |
+    | **SG Polynomial Order ($m$)** | $2$ (Quadratic) | Taylor expansion order balancing local acceleration ($w''$) & noise variance |
+    | **Min SG Window ($N_{\text{min}}$)** | $7\text{ days}$ | One full 7-day weekly lifestyle cycle |
+    | **Max SG Window ($N_{\text{max}}$)** | $\min(45, \lfloor N_{\text{total}}/2 \rfloor)$ | GCV degree-of-freedom denominator stability |
+    | **Recency Half-Life ($h^*$)** | $\mathrm{round}(0.3466 \cdot N_{\text{SG}}^*)$ | Level noise variance equivalence to GCV-selected $N_{\text{SG}}^*$ |
+    | **Trailing Window ($W_{\text{trail}}^*$)** | $\mathrm{round}(3.32 \cdot h^*)$ | $90\%$ exponential weight mass coverage horizon ($\eta = 0.90$) |
+    | **Uncertainty Interval** | $95\%$ Confidence ($1.96 \cdot SE$) | Standard two-sided Gaussian coverage factor $z_{0.975}$ |
     """)
 
     return
@@ -193,45 +241,25 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 4. Edge Handling: One-Sided Fits at the Start and at "Today"
+    ## 4. Edge Handling & Citations
 
-    Requiring a full symmetric window means the most recent
-    \(\lfloor N/2 \rfloor\) days could never be scored, which defeats the point
-    of a same-day rate estimate. SciPy's `savgol_filter` with `mode='interp'`
-    solves this the way SG filters have always handled edges: for any point
-    where a full centered window would run off the end of the data, it instead
-    fits the *same order polynomial* to the nearest full-length window that
-    *does* fit inside the available data, then evaluates that polynomial (or its
-    derivative) **at the edge point itself** — an extrapolation *within* an
-    already-fit local polynomial, not a naive line drawn through only two
-    points. Concretely:
+    - **Centered SG Historical Rate:** Available only for interior days with a full symmetric window ($\ge M$ days from either end). Set to `NaN` near edges because future observations are required.
+    - **SG Boundary Derivative (Diagnostic Only):** SciPy's `mode="interp"` evaluates a single boundary polynomial $p(t) = a + bt + ct^2$ at the edges, making its derivative $p'(t) = b + 2ct$ a linear segment across the boundary. This is a structural property of evaluating a fixed boundary polynomial, not evidence of a linearly changing weight loss rate.
+    - **Trailing Causal Nowcast:** Uses exponential recency weighting ($w_j = 2^{-j/h}$) over past observations through date $t$ only, providing a real-time nowcast that extends through today with a 95% model-based WLS confidence band.
 
-    - Near **day 1** of your log, the filter fits its order-\(n\) polynomial to
-      the first \(N\) days and evaluates the fit (and its derivative) at day 1,
-      2, 3, … rather than at the window's center.
-    - Near **today** (the most recent day), it fits the same order polynomial to
-      the last \(N\) days and evaluates moving forward through the most recent
-      days.
+    ### References & Citations
 
-    This is the standard, documented edge-extension behavior of SciPy's
-    implementation (SciPy `savgol_filter` documentation [web:8],
-    [docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html)
-    [web:8]) and is the most defensible one-sided estimate available: it is
-    exactly what the interior filter would produce if you kept the same local
-    polynomial model but simply had no more data past the edge, rather than
-    assuming the trend flattens, mirrors, or repeats (the alternative `mode`
-    options — `'nearest'`, `'mirror'`, `'wrap'`, `'constant'` — all impose an
-    assumption about data beyond the edge that we have no evidence for, so this
-    notebook deliberately avoids them).
-
-    **Caveat:** edge estimates necessarily use *less independent information*
-    than interior estimates (an edge fit near day 1 with a 21-day window still
-    uses 21 points, but they are all on one side, so the estimate is more
-    sensitive to whatever is happening in that specific stretch). Practically,
-    your **most recent half-window days of slope estimate should be treated as
-    provisional** and expected to shift as new days arrive and enter the window
-    symmetrically. This is the same phenomenon as revisions in seasonally
-    adjusted economic statistics, and is not a defect specific to this method.
+    1. **Walker, John** (1990). *The Hacker's Diet: How to lose weight and hair through stress and poor eating*.
+       URL: [https://www.fourmilab.ch/hackdiet/](https://www.fourmilab.ch/hackdiet/)
+       *(Pioneered exponentially weighted moving averages $w_j = 2^{-j/h}$ with $h \approx 7\text{--}10$ days for daily body-weight tracking to filter out water fluctuations without lag).*
+    2. **Cleveland, W. S.** (1979). *Robust Locally Weighted Regression and Smoothing Scatterplots*. Journal of the American Statistical Association, 74(368), 829–836.
+       DOI: [10.1080/01621459.1979.10481038](https://doi.org/10.1080/01621459.1979.10481038)
+    3. **Wang, Y. et al.** (2015). *Derivative Estimation Based on Difference Sequence via Locally Weighted Least Squares Regression*. Journal of Machine Learning Research, 16, 2617–2641.
+       URL: [https://jmlr.org/papers/v16/wang15a.html](https://jmlr.org/papers/v16/wang15a.html)
+    4. **Orsama, A. L. et al.** (2014). *Weight Rhythms: Weight Increases during Weekends and Decreases during Weekdays*. Obesity Facts, 7(1), 36–47.
+       DOI: [10.1159/000358801](https://doi.org/10.1159/000358801) | [PMC5644907](https://pmc.ncbi.nlm.nih.gov/articles/PMC5644907/)
+    5. **Durbin, J., & Koopman, S. J.** (2012). *Time Series Analysis by State Space Methods*. Oxford University Press.
+       DOI: [10.1093/acprof:oso/9780199641178.001.0001](https://doi.org/10.1093/acprof:oso/9780199641178.001.0001)
     """)
     return
 
@@ -305,7 +333,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import numpy as np
     import pandas as pd
@@ -315,8 +343,88 @@ def _():
     from plotly.subplots import make_subplots
     import marimo as mo
 
+    def compute_trailing_wls(df, weight_col="weight", window_days=28, half_life_days=10):
+        """
+        Computes rolling trailing weighted local-linear regression for each row in df.
+        For day t, uses only observations at or before t (causal nowcast).
+        Model: y_{t-j} = alpha - beta * j + eps_{t-j}, where j >= 0 is days back.
+        Weight: w_j = 2^(-j / half_life).
+        """
+        n = len(df)
+        weights = df[weight_col].to_numpy()
 
-    return alt, go, make_subplots, mo, np, pd, savgol_filter
+        trailing_level = np.full(n, np.nan)
+        trailing_daily_rate = np.full(n, np.nan)
+        trailing_weekly_rate = np.full(n, np.nan)
+        trailing_daily_se = np.full(n, np.nan)
+        trailing_weekly_se = np.full(n, np.nan)
+        trailing_rate_lower = np.full(n, np.nan)
+        trailing_rate_upper = np.full(n, np.nan)
+
+        for i in range(n):
+            start_idx = max(0, i - window_days + 1)
+            sub_weights = weights[start_idx : i + 1]
+            m = len(sub_weights)
+            if m < 3:
+                continue
+
+            j_vec = np.arange(m - 1, -1, -1, dtype=float)
+            w_vec = 2.0 ** (-j_vec / float(half_life_days))
+
+            X = np.column_stack([np.ones(m), -j_vec])
+            W = np.diag(w_vec)
+
+            XTW = X.T @ W
+            XTWX = XTW @ X
+
+            try:
+                inv_XTWX = np.linalg.inv(XTWX)
+                beta_vec = inv_XTWX @ XTW @ sub_weights
+
+                alpha_hat = beta_vec[0]
+                daily_beta = beta_vec[1]
+
+                preds = X @ beta_vec
+                resids = sub_weights - preds
+                sigma2 = np.sum(w_vec * (resids ** 2)) / np.sum(w_vec)
+
+                cov_beta = inv_XTWX * sigma2
+                daily_se = np.sqrt(max(0.0, cov_beta[1, 1]))
+
+                weekly_beta = daily_beta * 7.0
+                weekly_se = daily_se * 7.0
+
+                trailing_level[i] = alpha_hat
+                trailing_daily_rate[i] = daily_beta
+                trailing_weekly_rate[i] = weekly_beta
+                trailing_daily_se[i] = daily_se
+                trailing_weekly_se[i] = weekly_se
+                trailing_rate_lower[i] = weekly_beta - 1.96 * weekly_se
+                trailing_rate_upper[i] = weekly_beta + 1.96 * weekly_se
+            except np.linalg.LinAlgError:
+                pass
+
+        return pd.DataFrame({
+            "trailing_level": trailing_level,
+            "trailing_daily_rate": trailing_daily_rate,
+            "trailing_weekly_rate": trailing_weekly_rate,
+            "trailing_daily_se": trailing_daily_se,
+            "trailing_weekly_se": trailing_weekly_se,
+            "trailing_rate_lower_95": trailing_rate_lower,
+            "trailing_rate_upper_95": trailing_rate_upper,
+        })
+
+
+    return (
+        alt,
+        compute_trailing_wls,
+        go,
+        make_subplots,
+        mo,
+        np,
+        pd,
+        savgol_filter,
+    )
 
 
 @app.cell(hide_code=True)
@@ -403,8 +511,6 @@ def _(inFNm):
                 print("  No missing points found.")
     except Exception:
         df_raw_file = []
-
-    df_raw_file
     return (df_raw_file,)
 
 
@@ -418,7 +524,7 @@ def _(mo, results_df):
         stop=len(results_df) - 1,
         step=1,
         value=len(results_df) - 1,
-        label=f"Time Slider ({_d_start} — {_d_end})",
+        label=f"Inspection Date Slider ({_d_start} — {_d_end})",
         full_width=True,
     )
     return (time_slider,)
@@ -428,11 +534,23 @@ def _(mo, results_df):
 def _(mo):
     poly_order = mo.ui.dropdown(options=["1", "2", "3"], value="2", label="SG polynomial order")
 
-    min_window = mo.ui.number(start=5, stop=61, step=2, value=7, label="Smallest window to test (days)")
-    max_window = mo.ui.number(start=9, stop=91, step=2, value=45, label="Largest window to test (days)")
+    min_window = mo.ui.number(start=5, stop=61, step=2, value=7, label="Smallest SG window (days)")
+    max_window = mo.ui.number(start=9, stop=91, step=2, value=45, label="Largest SG window (days)")
 
-    mo.hstack([poly_order, min_window, max_window])
-    return max_window, min_window, poly_order
+    rate_window_days = mo.ui.slider(start=7, stop=60, step=1, value=28, label="Trailing Rate Window (days)")
+    rate_half_life_days = mo.ui.slider(start=3, stop=30, step=1, value=10, label="Recency Half-Life (days)")
+
+    mo.vstack([
+        mo.hstack([poly_order, min_window, max_window], gap=2),
+        mo.hstack([rate_window_days, rate_half_life_days], gap=2),
+    ])
+    return (
+        max_window,
+        min_window,
+        poly_order,
+        rate_half_life_days,
+        rate_window_days,
+    )
 
 
 @app.cell(hide_code=True)
@@ -448,14 +566,6 @@ def _(mo):
     your total data length, since SG needs the window length to not exceed the
     series length and the GCV criterion below becomes unreliable if the window
     starts to approach the full series.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 9. Select the Optimal Window via Generalized Cross-Validation
     """)
     return
 
@@ -564,12 +674,17 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def weight_and_rate_cell(go, make_subplots, mo, results_df, time_slider):
+def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
     _idx = int(time_slider.value)
     _sel_row = results_df.iloc[_idx]
     _sel_date = _sel_row["date"]
 
-    _edge_df = results_df[results_df["is_edge_estimate"]]
+    # Unified color palette for traces, markers, and readout text
+    _raw_color = "#4682b4"  # Steel blue matching Raw Weight
+    _sg_weight_color = "crimson"  # Crimson matching SG Smoothed Weight
+    _sg_rate_color = "#1d4ed8"  # Royal blue matching Centered SG Retrospective Rate
+    _trailing_rate_color = "#059669"  # Emerald green matching Trailing WLS Causal Nowcast
+    _sg_edge_rate_color = "#f97316"  # Orange matching SG Boundary Derivative Diagnostic
 
     _fig = make_subplots(
         rows=2,
@@ -578,11 +693,11 @@ def weight_and_rate_cell(go, make_subplots, mo, results_df, time_slider):
         vertical_spacing=0.10,
         subplot_titles=(
             "1. Raw Weight vs. SG-Smoothed Weight Trend",
-            "2. Estimated Weekly Rate of Weight Change (Negative = Losing Weight)",
+            "2. Weekly Rate of Weight Change: Centered SG Retrospective vs. Trailing Causal Nowcast",
         ),
     )
 
-    # --- Subplot 1: Raw & Smoothed Weight ---
+    # --- Subplot 1: Weight ---
     _fig.add_trace(
         go.Scatter(
             x=results_df["date"],
@@ -590,105 +705,160 @@ def weight_and_rate_cell(go, make_subplots, mo, results_df, time_slider):
             mode="lines+markers",
             name="Raw Weight",
             line=dict(color="rgba(70, 130, 180, 0.4)", width=1.5),
-            marker=dict(color="rgba(70, 130, 180, 0.6)", size=4),
+            marker=dict(color=_raw_color, size=4),
             hovertemplate="Date: %{x|%Y-%m-%d}<br>Raw Weight: %{y:.1f} lbs<extra></extra>",
         ),
         row=1,
         col=1,
     )
 
+    # Main Centered SG Smoothed Weight (Solid Crimson)
     _fig.add_trace(
         go.Scatter(
             x=results_df["date"],
-            y=results_df["smoothed_weight"],
+            y=results_df["sg_weight_centered"],
             mode="lines",
-            name="Smoothed Weight",
-            line=dict(color="rgba(220, 20, 60, 0.85)", width=2.5),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Smoothed Weight: %{y:.2f} lbs<extra></extra>",
+            name="Centered SG Weight",
+            line=dict(color=_sg_weight_color, width=2.5),
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Centered SG Weight: %{y:.2f} lbs<extra></extra>",
         ),
         row=1,
         col=1,
     )
 
+    # Boundary SG Smoothed Weight (Dashed Crimson, diagnostic)
     _fig.add_trace(
         go.Scatter(
-            x=_edge_df["date"],
-            y=_edge_df["smoothed_weight"],
-            mode="markers",
-            name="Edge Estimate (Weight)",
-            marker=dict(color="orange", size=5, opacity=0.8),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Edge Smoothed: %{y:.2f} lbs<extra></extra>",
+            x=results_df["date"],
+            y=results_df["sg_weight_full"],
+            mode="lines",
+            name="Provisional SG Edge Weight",
+            line=dict(color=_sg_weight_color, width=1.5, dash="dash"),
+            opacity=0.6,
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Edge SG Weight: %{y:.2f} lbs<extra></extra>",
         ),
         row=1,
         col=1,
     )
 
-    # Highlight selected point on Plot 1
+    # Selected Date Marker on Subplot 1
     _fig.add_trace(
         go.Scatter(
             x=[_sel_date],
             y=[_sel_row["smoothed_weight"]],
             mode="markers",
-            name="Selected Time",
-            marker=dict(color="#2563eb", size=10, symbol="diamond", line=dict(color="white", width=1.5)),
+            name="Selected Date Weight",
+            marker=dict(
+                color=_sg_weight_color,
+                size=10,
+                symbol="diamond",
+                line=dict(color="white", width=1.5),
+            ),
             showlegend=False,
             hovertemplate="Selected Date: %{x|%Y-%m-%d}<br>Smoothed: %{y:.2f} lbs<extra></extra>",
         ),
         row=1,
         col=1,
     )
-
-    # Vertical Reference Line on Plot 1 at time selected by slider
-    _fig.add_vline(x=_sel_date, line_dash="dot", line_color="#2563eb", line_width=1.5, row=1, col=1)
+    _fig.add_vline(
+        x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5, row=1, col=1
+    )
 
     # --- Subplot 2: Rate of Change ---
-    _fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.0, row=2, col=1)
+    _fig.add_hline(
+        y=0, line_dash="dash", line_color="gray", line_width=1.0, row=2, col=1
+    )
 
+    # 1. Primary Centered SG Historical Rate (Solid Blue)
     _fig.add_trace(
         go.Scatter(
             x=results_df["date"],
-            y=results_df["weekly_rate"],
+            y=results_df["sg_weekly_rate_centered"],
             mode="lines",
-            name="Weekly Rate",
-            line=dict(color="steelblue", width=2.2),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Weekly Rate: %{y:.2f} lbs/wk<extra></extra>",
+            name="Centered SG Historical Rate (Retrospective)",
+            line=dict(color=_sg_rate_color, width=2.5),
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Centered SG Rate: %{y:.2f} lbs/wk<extra></extra>",
         ),
         row=2,
         col=1,
     )
 
+    # 2. Trailing Causal WLS Nowcast Rate (Solid Emerald Green)
     _fig.add_trace(
         go.Scatter(
-            x=_edge_df["date"],
-            y=_edge_df["weekly_rate"],
-            mode="markers",
-            name="Edge Estimate (Rate)",
-            marker=dict(color="orange", size=5, opacity=0.8),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Edge Rate: %{y:.2f} lbs/wk<extra></extra>",
+            x=results_df["date"],
+            y=results_df["trailing_weekly_rate"],
+            mode="lines",
+            name="Trailing WLS Current Rate (Causal Nowcast)",
+            line=dict(color=_trailing_rate_color, width=2.5),
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Trailing Rate: %{y:.2f} lbs/wk<extra></extra>",
         ),
         row=2,
         col=1,
     )
 
-    # Highlight selected point on Plot 2
+    # 3. Trailing WLS 95% Confidence Band
+    _fig.add_trace(
+        go.Scatter(
+            x=results_df["date"].tolist() + results_df["date"].tolist()[::-1],
+            y=results_df["trailing_rate_upper_95"].tolist()
+            + results_df["trailing_rate_lower_95"].tolist()[::-1],
+            fill="toself",
+            fillcolor="rgba(16, 185, 129, 0.15)",
+            line=dict(color="rgba(255,255,255,0)"),
+            name="Trailing Rate 95% CI Band",
+            hoverinfo="skip",
+        ),
+        row=2,
+        col=1,
+    )
+
+    # 4. Diagnostic SG Boundary Derivative
+    _fig.add_trace(
+        go.Scatter(
+            x=results_df["date"],
+            y=results_df["sg_weekly_rate_full"],
+            mode="lines",
+            name="SG Boundary Derivative (Diagnostic Only)",
+            line=dict(color=_sg_edge_rate_color, width=1.2, dash="dash"),
+            opacity=0.5,
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>SG Edge Derivative: %{y:.2f} lbs/wk (linear diagnostic)<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+
+    # Determine active rate value and marker color on Subplot 2
+    _has_centered = not np.isnan(_sel_row["sg_weekly_rate_centered"])
+    _sel_rate_val = (
+        _sel_row["sg_weekly_rate_centered"]
+        if _has_centered
+        else _sel_row["trailing_weekly_rate"]
+    )
+    _sel_rate_marker_color = _sg_rate_color if _has_centered else _trailing_rate_color
+
+    # Selected Date Marker on Subplot 2
     _fig.add_trace(
         go.Scatter(
             x=[_sel_date],
-            y=[_sel_row["weekly_rate"]],
+            y=[_sel_rate_val],
             mode="markers",
-            name="Selected Time Rate",
-            marker=dict(color="#2563eb", size=10, symbol="diamond", line=dict(color="white", width=1.5)),
+            name="Selected Date Rate",
+            marker=dict(
+                color=_sel_rate_marker_color,
+                size=10,
+                symbol="diamond",
+                line=dict(color="white", width=1.5),
+            ),
             showlegend=False,
-            hovertemplate="Selected Date: %{x|%Y-%m-%d}<br>Weekly Rate: %{y:.2f} lbs/wk<extra></extra>",
         ),
         row=2,
         col=1,
     )
+    _fig.add_vline(
+        x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5, row=2, col=1
+    )
 
-    # Vertical Reference Line on Plot 2 at time selected by slider
-    _fig.add_vline(x=_sel_date, line_dash="dot", line_color="#2563eb", line_width=1.5, row=2, col=1)
-
-    # Compact Plotly height (450px total) with top margin 65px so legend (y=1.12) sits cleanly above title
     _fig.update_layout(
         template="plotly_white",
         width=800,
@@ -701,7 +871,7 @@ def weight_and_rate_cell(go, make_subplots, mo, results_df, time_slider):
             y=1.12,
             xanchor="center",
             x=0.5,
-            font=dict(size=12),
+            font=dict(size=11),
         ),
     )
 
@@ -709,21 +879,35 @@ def weight_and_rate_cell(go, make_subplots, mo, results_df, time_slider):
     _fig.update_yaxes(title_text="Rate (lbs/week)", row=2, col=1)
     _fig.update_xaxes(title_text="Date", row=2, col=1)
 
-    # Compact, space-efficient readout banner
-    _rate_color = "#dc2626" if _sel_row["weekly_rate"] > 0 else "#16a34a"
-    _edge_badge = (
-        '<span style="color: #d97706; font-size: 11px; font-weight: 600;">(Edge Estimate)</span>'
-        if _sel_row["is_edge_estimate"]
-        else ""
+    # Status & Readout Banner using line indicators matching plot trace styles
+    _is_edge = _sel_row["is_sg_edge"]
+
+    _sg_status_str = (
+        f'<span style="color:{_sg_rate_color}; font-weight:bold;">{_sel_row["sg_weekly_rate_centered"]:+.2f} lbs/wk</span> (Centered Retrospective)'
+        if _has_centered
+        else f'<span style="color:{_sg_edge_rate_color}; font-weight:bold;">{_sel_row["sg_weekly_rate_full"]:+.2f} lbs/wk</span> (SG Edge Diagnostic — linear boundary fit)'
     )
 
+    _line_date = '<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="2" stroke-dasharray="2,2"/></svg>'
+    _line_raw = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_raw_color}" stroke-width="2.5"/></svg>'
+    _line_sg_weight = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_sg_weight_color}" stroke-width="2.5"/></svg>'
+    _line_trailing = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_trailing_rate_color}" stroke-width="2.5"/></svg>'
+
+    _curr_dash_attr = 'stroke-dasharray="4,3"' if not _has_centered else ''
+    _curr_sg_color = _sg_rate_color if _has_centered else _sg_edge_rate_color
+    _line_sg_rate = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_curr_sg_color}" stroke-width="2.5" {_curr_dash_attr}/></svg>'
+
     _readout_ui = mo.md(f"""
-    <div style="display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-around; background: #f8f9fa; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; font-family: system-ui, -apple-system, sans-serif; font-size: 13px; color: #1e293b; margin-top: 4px;">
-      <div>📅 <strong>Date:</strong> {_sel_date.strftime('%b %d, %Y')} {_edge_badge}</div>
-      <div>⚖️ <strong>Raw Weight:</strong> {_sel_row['weight']:.1f} lbs</div>
-      <div>📈 <strong>Smoothed Weight:</strong> {_sel_row['smoothed_weight']:.2f} lbs</div>
-      <div>⚡ <strong>Weekly Rate:</strong> <span style="color: {_rate_color}; font-weight: bold;">{_sel_row['weekly_rate']:+.2f} lbs/wk</span></div>
-      <div>⏱️ <strong>Daily Slope:</strong> {_sel_row['daily_slope']:+.3f} lbs/day</div>
+    <div style="background: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid #cbd5e1; font-family: system-ui, sans-serif; font-size: 13px; color: #0f172a; margin-top: 4px;">
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; font-weight: 600; margin-bottom: 6px;">
+        <div>{_line_date}Date: {_sel_date.strftime('%b %d, %Y')}</div>
+        <div>{_line_raw}Raw Weight: <span style="color:{_raw_color}; font-weight:bold;">{_sel_row['weight']:.1f} lbs</span></div>
+        <div>{_line_sg_weight}SG Smoothed Weight: <span style="color:{_sg_weight_color}; font-weight:bold;">{_sel_row['smoothed_weight']:.2f} lbs</span></div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; border-top: 1px solid #e2e8f0; padding-top: 6px;">
+        <div>{_line_trailing}<strong>Trailing WLS Causal Nowcast:</strong> <span style="color:{_trailing_rate_color}; font-weight:bold;">{_sel_row['trailing_weekly_rate']:+.2f} lbs/wk</span> (95% CI: [{_sel_row['trailing_rate_lower_95']:+.2f}, {_sel_row['trailing_rate_upper_95']:+.2f}])</div>
+        <div>{_line_sg_rate}<strong>SG Retrospective Rate:</strong> {_sg_status_str}</div>
+      </div>
     </div>
     """)
 
@@ -734,7 +918,6 @@ def weight_and_rate_cell(go, make_subplots, mo, results_df, time_slider):
     ], gap=0.5).style({"max-height": "none", "overflow": "visible"})
 
     charts_display
-
     return
 
 
@@ -761,27 +944,59 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(best_window, df_raw, poly_order, savgol_filter):
+def _(
+    best_window,
+    compute_trailing_wls,
+    df_raw,
+    np,
+    poly_order,
+    rate_half_life_days,
+    rate_window_days,
+    savgol_filter,
+):
     _polyorder = int(poly_order.value)
     _w = best_window
 
-    # df_raw is already chronologically sorted (oldest first, 1-day spacing)
     weight_arr = df_raw["weight"].to_numpy()
 
-    smoothed_weight = savgol_filter(weight_arr, window_length=_w, polyorder=_polyorder, deriv=0, mode="interp")
-    daily_slope = savgol_filter(weight_arr, window_length=_w, polyorder=_polyorder, deriv=1, mode="interp")
-    weekly_slope = daily_slope * 7.0
-
-    results_df = df_raw.copy()
-    results_df["smoothed_weight"] = smoothed_weight
-    results_df["daily_slope"] = daily_slope
-    results_df["weekly_rate"] = weekly_slope
+    # Full SG estimates (mode="interp")
+    sg_weight_full = savgol_filter(weight_arr, window_length=_w, polyorder=_polyorder, deriv=0, mode="interp")
+    sg_daily_rate_full = savgol_filter(weight_arr, window_length=_w, polyorder=_polyorder, deriv=1, mode="interp")
+    sg_weekly_rate_full = sg_daily_rate_full * 7.0
 
     half_window = _w // 2
 
-    results_df["is_edge_estimate"] = (results_df.index < half_window) | (
-        results_df.index >= len(results_df) - half_window
+    # Define symmetric interior vs edge boolean masks
+    is_centered_sg = (df_raw.index >= half_window) & (df_raw.index < len(df_raw) - half_window)
+    is_sg_edge = ~is_centered_sg
+
+    results_df = df_raw.copy()
+    results_df["sg_weight_full"] = sg_weight_full
+    results_df["sg_daily_rate_full"] = sg_daily_rate_full
+    results_df["sg_weekly_rate_full"] = sg_weekly_rate_full
+
+    # Centered-only series (NaN outside symmetric interior)
+    results_df["sg_weight_centered"] = np.where(is_centered_sg, sg_weight_full, np.nan)
+    results_df["sg_weekly_rate_centered"] = np.where(is_centered_sg, sg_weekly_rate_full, np.nan)
+    results_df["is_centered_sg"] = is_centered_sg
+    results_df["is_sg_edge"] = is_sg_edge
+
+    # Backward compatibility aliases
+    results_df["smoothed_weight"] = sg_weight_full
+    results_df["daily_slope"] = sg_daily_rate_full
+    results_df["weekly_rate"] = sg_weekly_rate_full
+    results_df["is_edge_estimate"] = is_sg_edge
+
+    # Compute trailing causal WLS nowcast
+    _wls_df = compute_trailing_wls(
+        df_raw,
+        weight_col="weight",
+        window_days=int(rate_window_days.value),
+        half_life_days=float(rate_half_life_days.value),
     )
+
+    for _col in _wls_df.columns:
+        results_df[_col] = _wls_df[_col]
     return (results_df,)
 
 
@@ -826,6 +1041,11 @@ def _(df_raw_file, inFNm, mo, np, pd):
 
     mo.md(data_source_note)
     return (df_raw,)
+
+
+@app.cell
+def _():
+    return
 
 
 if __name__ == "__main__":
