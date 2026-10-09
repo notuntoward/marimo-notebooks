@@ -75,3 +75,18 @@ uvx marimo edit "notebooks/politics/state tax comparison/wallethub_tax_burden_re
 If marimo is already running, restart it after setting the variable. The notebook
 reads the key from the environment and does not save it; raw downloads are cached
 locally in `data_cache/`.
+
+## Readable report
+
+The [HTML export](exports/wallethub_tax_burden_replication.html) is a browser-readable
+snapshot of the notebook with its code and rendered outputs. This snapshot was
+generated without `CENSUS_API_KEY`: it shows the FY2021 and FY2022 calculations, while
+FY2023 and FY2024 require the API key described above.
+
+After setting the key, regenerate the report with:
+
+```bash
+uvx marimo export html --sandbox \
+  "notebooks/politics/state tax comparison/wallethub_tax_burden_replication.py" \
+  -o "notebooks/politics/state tax comparison/exports/wallethub_tax_burden_replication.html"
+```
