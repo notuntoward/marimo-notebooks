@@ -32,7 +32,7 @@ def _(mo):
 
     **Primary sources downloaded by this notebook:**
     - [U.S. Census Bureau, state and local government finances](https://www.census.gov/data/developers/data-sets/govslocalfin.html)
-      (tax collections; source years 2021–2024)
+      (tax collections; published source years FY2021–FY2024)
     - [U.S. BEA, SAINC1 state annual personal income](https://apps.bea.gov/regional/zip/SAINC.zip)
 
     The Census numerator is the combined state-and-local total for each state area:
@@ -65,6 +65,13 @@ def _(mo):
     | 2026 | FY2023 |
     | Latest Census data | FY2024 |
 
+    **FY2025 Census data are not available yet.** Census currently documents its
+    [State and Local Government Finances time series](https://www.census.gov/data/developers/data-sets/govslocalfin.html)
+    as covering 2017–2024; the FY2024 files were released in July 2026. The notebook
+    reports FY2025 as unavailable instead of fabricating a value from personal income
+    alone. The “2025” in the WalletHub article row above is an article edition and maps
+    to Census FY2022; it is not Census FY2025.
+
     The first column is the WalletHub article edition; the second is the fiscal year of
     the downloaded Census observations. These year assignments are informed estimates,
     not confirmed WalletHub vintages. Census released FY2022 on
@@ -85,6 +92,7 @@ def _(mo):
 
     FY2021 and FY2022 use Census workbooks and BEA personal income downloads without an API key.
     FY2023 and FY2024 use the Census API, which requires a [free Census API key](https://api.census.gov/data/key_signup.html).
+    Census has not published FY2025 finance data; no API key can return those missing observations.
     Set it in the same shell that starts marimo:
 
     ```powershell
@@ -120,6 +128,7 @@ def _(pathlib):
         "WalletHub 2026 article": 2023,
     }
     LATEST_FY = 2024  # Census released FY2024 in July 2026.
+    REQUESTED_FY = 2025  # Not yet published in Census' current 2017–2024 series.
 
     # (total, property, income, sales_excise) in %, transcribed from the articles
     # solely as validation targets.
@@ -147,7 +156,7 @@ def _(pathlib):
         "New Mexico","New York","North Carolina","North Dakota","Ohio","Oklahoma","Oregon",
         "Pennsylvania","Rhode Island","South Carolina","South Dakota","Tennessee","Texas",
         "Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"]
-    return CACHE, EDITIONS, FIXTURES, HEADERS, LATEST_FY, STATES
+    return CACHE, EDITIONS, FIXTURES, HEADERS, LATEST_FY, REQUESTED_FY, STATES
 
 
 @app.cell
@@ -386,12 +395,21 @@ def _(load_personal_income, mo):
 
 
 @app.cell
-def _(EDITIONS, FIXTURES, LATEST_FY, PI, mo, pd, safe_burden):
+def _(EDITIONS, FIXTURES, LATEST_FY, PI, REQUESTED_FY, mo, pd, safe_burden):
     def _():
-        results, errors, rows = {}, {}, []
-        all_fy = sorted(set(EDITIONS.values()) | {LATEST_FY})
+        results, errors, unavailable, rows = {}, {}, {}, []
+        all_fy = sorted(set(EDITIONS.values()) | {LATEST_FY, REQUESTED_FY})
         with mo.status.spinner("Downloading Census state & local finance tables..."):
             for _fy in all_fy:
+                if _fy > LATEST_FY:
+                    unavailable[_fy] = (
+                        f"Not published yet. Census' [current State and Local Finance "
+                        f"series](https://www.census.gov/data/developers/data-sets/"
+                        f"govslocalfin.html) covers 2017–{LATEST_FY}; no FY{_fy} "
+                        "tax burden or ranking can be calculated until Census releases "
+                        "the tax-revenue observations."
+                    )
+                    continue
                 if _fy not in PI.columns:
                     errors[_fy] = f"BEA personal income not yet available for {_fy}"
                     continue
@@ -422,16 +440,19 @@ def _(EDITIONS, FIXTURES, LATEST_FY, PI, mo, pd, safe_burden):
                     "states checked": len(FIXTURES[ed]),
                 })
         match = pd.DataFrame(rows)
-        return results, errors, match
+        return results, errors, unavailable, match
 
 
-    results, errors, match = _()
-    return errors, match, results
+    results, errors, unavailable, match = _()
+    return errors, match, results, unavailable
 
 
 @app.cell
-def _(errors, match, mo):
+def _(errors, match, mo, unavailable):
     err_md = "\n".join(f"- FY{k}: `{v[:300]}`" for k, v in errors.items()) or "None"
+    unavailable_md = "\n".join(
+        f"- FY{k}: {v}" for k, v in unavailable.items()
+    ) or "None"
     mo.vstack([
         mo.md(
             "## Article-year check\n"
@@ -441,6 +462,7 @@ def _(errors, match, mo):
             "differences can reflect source revisions and rounding."
         ),
         mo.ui.table(match.round(3), selection=None) if len(match) else mo.md("No benchmark results."),
+        mo.md(f"**Requested Census year not yet published:**\n\n{unavailable_md}"),
         mo.md(f"**Download / parse errors:**\n\n{err_md}"),
     ])
     return
@@ -483,7 +505,8 @@ def _(EDITIONS, LATEST_FY, mo, results):
         mo.md(
             "## Recomputed rankings\n"
             "Rank 1 is the highest burden. Each article-year table is shown separately; "
-            "the latest official Census year is a third, updated calculation."
+            "FY2024 is the latest published calculation. The requested FY2025 Census "
+            "calculation is pending the Census data release; see the availability note above."
         ),
         *ranking_sections,
     ])

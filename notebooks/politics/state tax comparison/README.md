@@ -21,6 +21,21 @@ calculation file. The assignments are supported by source-release timing and by
 comparing the notebook's downloaded-data results with five published WalletHub state
 examples per edition.
 
+## Requested Census FY2025 analysis
+
+The WalletHub **2025 article edition** maps to Census FY2022; that article year is not
+the same thing as **Census fiscal year 2025**. Census's [current State and Local
+Government Finances data/API page](https://www.census.gov/data/developers/data-sets/govslocalfin.html)
+documents coverage through FY2024, and the [FY2024 data release](https://www.census.gov/data/datasets/2024/econ/local/public-use-datasets.html)
+was published in July 2026. Census has not published FY2025 government-finance
+observations yet.
+
+Because the Census tax-revenue numerator for FY2025 is not available, the notebook
+cannot honestly compute 2025 tax-to-income percentages or rankings. It includes FY2025
+in the requested-year output and explicitly reports it as unavailable; it does not
+substitute a BEA-only denominator or relabel another Census year as 2025. FY2024 remains
+the latest calculation until Census releases FY2025 data.
+
 The release dates make FY2022 a reasonable match for the 2025 article: Census released
 the 2022 finance data on [October 31, 2024](https://www.census.gov/newsroom/press-releases/2024/census-of-governments.html),
 before WalletHub's April 1, 2025 report. Census published its FY2023 data in
@@ -76,17 +91,23 @@ If marimo is already running, restart it after setting the variable. The noteboo
 reads the key from the environment and does not save it; raw downloads are cached
 locally in `data_cache/`.
 
+The notebook currently uses the Census API for FY2023 and FY2024. FY2025 is shown as
+unavailable until the Census source above publishes that year; adding an API key cannot
+provide unpublished data.
+
 ## Readable report
 
 The [HTML export](exports/wallethub_tax_burden_replication.html) is a browser-readable
 snapshot of the notebook with its code and rendered outputs. This snapshot was
-generated without `CENSUS_API_KEY`: it shows the FY2021 and FY2022 calculations, while
-FY2023 and FY2024 require the API key described above.
+generated without `CENSUS_API_KEY`: it shows the FY2021/FY2022 rankings, API-key
+messages for FY2023/FY2024, and an explicit FY2025-not-yet-published status. With an
+API key, rerun the export to include FY2023/FY2024 results; FY2025 cannot be computed
+until Census publishes its data.
 
 After setting the key, regenerate the report with:
 
 ```bash
-uvx marimo export html --sandbox \
+uvx marimo export html --sandbox --force \
   "notebooks/politics/state tax comparison/wallethub_tax_burden_replication.py" \
   -o "notebooks/politics/state tax comparison/exports/wallethub_tax_burden_replication.html"
 ```
