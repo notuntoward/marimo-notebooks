@@ -174,7 +174,8 @@ Choose states by name in its multiselect to highlight their tracks; the selected
 states have larger points, hover tooltips, and labels at the last available year.
 The initial selection is the three states with the lowest mean ranks and the three
 with the highest mean ranks. Rank 1 (highest burden) is at the top. This chart uses
-only the independent Census + BEA calculations, not WalletHub article ranks.
+only the independent Census + BEA calculations, not WalletHub article ranks. Its
+compact year spacing leaves room for the selected state labels on a typical page width.
 
 FY2024 is the latest Census fiscal year currently included in the notebook and is
 calculated from Census FY2024 tax collections and BEA 2024 personal income when the
@@ -183,11 +184,14 @@ corresponding WalletHub article rank for FY2024. FY2023 and FY2024 require
 `CENSUS_API_KEY`; if FY2024 cannot be loaded, the notebook displays the recorded
 calculation error instead of implying the year is unavailable or silently dropping it.
 
-The latest-year stacked bar chart shows property, individual income, general sales,
-and selective sales separately. Every segment is the corresponding state-and-local
-revenue divided by personal income, not a fraction of total taxes collected. The
-four segments sum to the total burden; general and selective sales are combined only
-when comparing with WalletHub's sales/excise category.
+The latest-year tax-mix charts show the separate individual-income, general-sales,
+selective-sales, and property segments, and a second view with general and selective
+sales combined. Every segment is the corresponding state-and-local revenue divided
+by personal income, not a fraction of total taxes collected. Hover tooltips include
+the rank for the individual tax type and the overall rank. A muted `#rank` label at
+the end of each full bar keeps the overall rank visible in a printed chart without
+repeating it on every segment. Both charts order segments from left to right starting
+with individual income; the combined view continues with sales/excise and property.
 
 ## Full state tables
 

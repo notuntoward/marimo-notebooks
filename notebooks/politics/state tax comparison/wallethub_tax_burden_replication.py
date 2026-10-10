@@ -656,7 +656,14 @@ def _(load_census_taxes, pd):
         out["total"] = out[
             ["property", "income", "general_sales", "selective_sales"]
         ].sum(axis=1)
-        for c in ["total", "property", "income", "sales_excise"]:
+        for c in [
+            "total",
+            "property",
+            "income",
+            "general_sales",
+            "selective_sales",
+            "sales_excise",
+        ]:
             out[f"rank_{c}"] = out[c].rank(ascending=False, method="min").astype(int)
         out["property_tax_revenue_usd"] = taxes["property"]
         out["individual_income_tax_revenue_usd"] = taxes["income"]
@@ -1197,7 +1204,7 @@ def _(alt, burden_data, mo, state_picker):
             "census_fy:O",
             title="Census fiscal year",
             sort="ascending",
-            scale=alt.Scale(padding=0.7),
+            scale=alt.Scale(padding=1.8),
             axis=alt.Axis(labelAngle=0),
         )
         rank_axis = alt.Y(
@@ -1244,7 +1251,7 @@ def _(alt, burden_data, mo, state_picker):
             tooltip=trend_tooltip,
         )
         selected_labels = alt.Chart(endpoint_labels).mark_text(
-            align="left", dx=7, fontSize=11
+            align="left", dx=7, fontSize=10
         ).encode(
             x=fiscal_year_axis,
             y=rank_axis,
@@ -1259,7 +1266,7 @@ def _(alt, burden_data, mo, state_picker):
                 selected_labels,
             )
             .properties(
-                width=820,
+                width=640,
                 height=560,
                 title=alt.TitleParams(
                     text="Track selected states across Census fiscal years",
@@ -1295,47 +1302,80 @@ def _(mo):
     mo.md(r"""
     ## Latest-year tax mix by state
 
-    Each segment is one Census tax type: property, individual income, general
-    sales, or selective sales. Each is state-and-local revenue divided by that
-    state's BEA personal income, multiplied by 100; it is **not** a share of total
-    tax revenue. WalletHub combines general and selective sales as its sales/excise
-    category; this chart splits them out. The four segments sum to total burden.
+    Both charts show each state's tax burden as stacked horizontal bars, sorted
+    by total burden. The first separates individual income, general sales,
+    selective sales, and property taxes. The second combines general and
+    selective sales into one sales/excise segment, ordered income, sales/excise,
+    then property. Every segment is state-and-local revenue divided by that
+    state's BEA personal income, multiplied by 100; it is **not** a share of
+    total tax revenue. A muted `#rank` at the end of each bar gives its overall
+    rank; hover over a segment for its individual tax-type rank.
     """)
     return
 
 
 @app.cell
-def _(LATEST_FY, alt, mo, results):
+def _(LATEST_FY, mo, pd, results):
     mo.stop(LATEST_FY not in results)
-    latest = results[LATEST_FY].rename_axis("state").reset_index()
-    tax_type_labels = {
-        "property": "Property tax",
-        "income": "Individual income tax",
-        "general_sales": "General sales tax",
-        "selective_sales": "Selective sales tax",
-    }
-    tax_type_order = list(tax_type_labels.values())
-    latest_long = latest.melt(
-        id_vars=["state", "total"],
-        value_vars=list(tax_type_labels),
-        var_name="tax_type",
-        value_name="burden_pct",
+    latest_bar_data = results[LATEST_FY].rename_axis("state").reset_index()
+
+    def make_tax_mix_data(tax_types):
+        pieces = []
+        for order, (tax_type, (value_column, rank_column)) in enumerate(
+            tax_types.items()
+        ):
+            pieces.append(
+                latest_bar_data[
+                    ["state", "total", "rank_total", value_column, rank_column]
+                ]
+                .rename(
+                    columns={
+                        value_column: "burden_pct",
+                        rank_column: "tax_type_rank",
+                    }
+                )
+                .assign(tax_type=tax_type, tax_type_order=order)
+            )
+        return pd.concat(pieces, ignore_index=True)
+
+    separate_sales_tax_mix = make_tax_mix_data(
+        {
+            "Individual income tax": ("income", "rank_income"),
+            "General sales tax": ("general_sales", "rank_general_sales"),
+            "Selective sales tax": ("selective_sales", "rank_selective_sales"),
+            "Property tax": ("property", "rank_property"),
+        }
     )
-    latest_long["tax_type"] = latest_long["tax_type"].map(tax_type_labels)
-    latest_chart = (
-        alt.Chart(latest_long)
-        .mark_bar()
-        .encode(
+    combined_sales_tax_mix = make_tax_mix_data(
+        {
+            "Individual income tax": ("income", "rank_income"),
+            "Sales/excise tax": ("sales_excise", "rank_sales_excise"),
+            "Property tax": ("property", "rank_property"),
+        }
+    )
+    return combined_sales_tax_mix, separate_sales_tax_mix
+
+
+@app.cell
+def _(alt):
+    def tax_mix_chart(data, title):
+        tax_type_order = (
+            data[["tax_type", "tax_type_order"]]
+            .drop_duplicates()
+            .sort_values("tax_type_order")["tax_type"]
+            .tolist()
+        )
+
+        x_scale = alt.Scale(domain=[0, data["total"].max() * 1.16], nice=False)
+        state_sort = alt.SortField(field="total", order="descending")
+        bars = alt.Chart(data).mark_bar().encode(
             x=alt.X(
                 "burden_pct:Q",
                 stack="zero",
+                scale=x_scale,
                 title="Tax revenue as % of state personal income",
             ),
-            y=alt.Y(
-                "state:N",
-                sort=alt.SortField(field="total", order="descending"),
-                title=None,
-            ),
+            y=alt.Y("state:N", sort=state_sort, title=None),
             color=alt.Color(
                 "tax_type:N",
                 sort=tax_type_order,
@@ -1344,23 +1384,85 @@ def _(LATEST_FY, alt, mo, results):
                     orient="top", direction="horizontal", columns=2
                 ),
             ),
+            order=alt.Order("tax_type_order:Q", sort="ascending"),
             tooltip=[
                 alt.Tooltip("state:N", title="State"),
                 alt.Tooltip("tax_type:N", title="Tax type"),
-                alt.Tooltip("burden_pct:Q", title="Burden (%)", format=".2f"),
+                alt.Tooltip("burden_pct:Q", title="Tax burden (%)", format=".2f"),
+                alt.Tooltip(
+                    "tax_type_rank:Q",
+                    title="Tax-type rank (1 = highest)",
+                    format=".0f",
+                ),
+                alt.Tooltip(
+                    "rank_total:Q",
+                    title="Overall rank (1 = highest)",
+                    format=".0f",
+                ),
                 alt.Tooltip("total:Q", title="Total burden (%)", format=".2f"),
             ],
         )
-        .properties(
-            width=760,
-            height=760,
-            title=alt.TitleParams(
-                text=f"State and local tax revenue by type — Census FY{LATEST_FY}",
-                anchor="start",
-            ),
+
+        overall_rank_labels = data[
+            ["state", "total", "rank_total"]
+        ].drop_duplicates("state").copy()
+        overall_rank_labels["overall_rank_label"] = (
+            "#" + overall_rank_labels["rank_total"].astype(str)
         )
+        labels = alt.Chart(overall_rank_labels).mark_text(
+            align="left", baseline="middle", dx=5, fontSize=9, color="#666666"
+        ).encode(
+            x=alt.X("total:Q", scale=x_scale, axis=None),
+            y=alt.Y("state:N", sort=state_sort),
+            text="overall_rank_label:N",
+        )
+
+        return (
+            alt.layer(bars, labels)
+            .resolve_scale(x="shared", y="shared")
+            .properties(
+                width=760,
+                height=760,
+                title=alt.TitleParams(
+                    text=title,
+                    subtitle=[
+                        "Muted # labels at bar ends show overall rank; hover on a segment for tax-type rank."
+                    ],
+                    anchor="start",
+                ),
+            )
+        )
+
+    return (tax_mix_chart,)
+
+
+@app.cell
+def _(LATEST_FY, mo, separate_sales_tax_mix, tax_mix_chart):
+    separate_sales_chart = tax_mix_chart(
+        separate_sales_tax_mix,
+        f"State and local tax revenue by type — Census FY{LATEST_FY}",
     )
-    latest_chart
+    mo.vstack(
+        [
+            mo.md("### General and selective sales shown separately"),
+            separate_sales_chart,
+        ]
+    )
+    return
+
+
+@app.cell
+def _(LATEST_FY, combined_sales_tax_mix, mo, tax_mix_chart):
+    combined_sales_chart = tax_mix_chart(
+        combined_sales_tax_mix,
+        f"State and local tax revenue, sales/excise combined — Census FY{LATEST_FY}",
+    )
+    mo.vstack(
+        [
+            mo.md("### General and selective sales combined"),
+            combined_sales_chart,
+        ]
+    )
     return
 
 
