@@ -192,6 +192,8 @@ the rank for the individual tax type and the overall rank. A muted `#rank` label
 the end of each full bar keeps the overall rank visible in a printed chart without
 repeating it on every segment. Both charts order segments from left to right starting
 with individual income; the combined view continues with sales/excise and property.
+State rows remain ordered by overall tax-burden rank; a `▶` marker flags Washington's
+axis label without changing that order.
 
 ## Full state tables
 

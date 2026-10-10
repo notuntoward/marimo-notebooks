@@ -1200,12 +1200,19 @@ def _(alt, burden_data, mo, state_picker):
             highlighted["census_fy"].eq(last_year)
         ]
 
+        trend_year_values = sorted(burden_data["census_fy"].unique())
+        # Keep the first year beside the y-axis and reserve label room after the last.
+        trend_x_domain = [
+            trend_year_values[0] - 0.05,
+            trend_year_values[-1] + 0.75,
+        ]
         fiscal_year_axis = alt.X(
-            "census_fy:O",
+            "census_fy:Q",
             title="Census fiscal year",
-            sort="ascending",
-            scale=alt.Scale(padding=1.8),
-            axis=alt.Axis(labelAngle=0),
+            scale=alt.Scale(domain=trend_x_domain, nice=False),
+            axis=alt.Axis(
+                values=trend_year_values, format="d", labelAngle=0
+            ),
         )
         rank_axis = alt.Y(
             "overall_rank:Q",
@@ -1221,7 +1228,9 @@ def _(alt, burden_data, mo, state_picker):
         )
         trend_tooltip = [
             alt.Tooltip("state:N", title="State"),
-            alt.Tooltip("census_fy:O", title="Census fiscal year"),
+            alt.Tooltip(
+                "census_fy:Q", title="Census fiscal year", format=".0f"
+            ),
             alt.Tooltip("overall_rank:Q", title="Overall rank", format=".0f"),
             alt.Tooltip(
                 "total_burden_pct:Q", title="Total burden (%)", format=".2f"
@@ -1309,7 +1318,8 @@ def _(mo):
     then property. Every segment is state-and-local revenue divided by that
     state's BEA personal income, multiplied by 100; it is **not** a share of
     total tax revenue. A muted `#rank` at the end of each bar gives its overall
-    rank; hover over a segment for its individual tax-type rank.
+    rank; hover over a segment for its individual tax-type rank. The `▶`
+    marker flags Washington's y-axis label without changing the rank order.
     """)
     return
 
@@ -1368,6 +1378,11 @@ def _(alt):
 
         x_scale = alt.Scale(domain=[0, data["total"].max() * 1.16], nice=False)
         state_sort = alt.SortField(field="total", order="descending")
+        state_axis = alt.Axis(
+            labelExpr=(
+                "datum.value === 'Washington' ? '▶ Washington' : datum.value"
+            )
+        )
         bars = alt.Chart(data).mark_bar().encode(
             x=alt.X(
                 "burden_pct:Q",
@@ -1375,7 +1390,7 @@ def _(alt):
                 scale=x_scale,
                 title="Tax revenue as % of state personal income",
             ),
-            y=alt.Y("state:N", sort=state_sort, title=None),
+            y=alt.Y("state:N", sort=state_sort, title=None, axis=state_axis),
             color=alt.Color(
                 "tax_type:N",
                 sort=tax_type_order,
@@ -1413,7 +1428,7 @@ def _(alt):
             align="left", baseline="middle", dx=5, fontSize=9, color="#666666"
         ).encode(
             x=alt.X("total:Q", scale=x_scale, axis=None),
-            y=alt.Y("state:N", sort=state_sort),
+            y=alt.Y("state:N", sort=state_sort, axis=state_axis),
             text="overall_rank_label:N",
         )
 
