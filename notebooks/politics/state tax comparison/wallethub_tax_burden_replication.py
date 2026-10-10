@@ -51,42 +51,62 @@ def _(mo):
     those combinations are represented as $0. Duplicate rows or blank amounts still
     raise errors rather than being silently counted or filled.
 
-    ### Equation implemented
+    ### Equation and source mapping
 
-    For state $s$ and year $y$, let $C_{s,y,a}$ be the Census tax amount and
-    $P_{s,y}$ be BEA personal income:
+    Each tax-type percentage is that tax revenue divided by the state's personal
+    income, multiplied by 100. In other words, the denominator is not total tax
+    revenue. The chart at the end stacks three percentages: property tax,
+    individual income tax, and sales/excise tax. Sales/excise combines general-sales
+    and selective-sales revenue:
 
-    - $C_{s,y,a}$ is Census `govslocalfin.AMOUNT`, filtered by `NAME = s`,
-      `GOVTYPE_LABEL` = combined state and local, `AGG_DESC = a` (checked against
-      `AGG_DESC_LABEL`), and API predicate `time = y`. For FY2021–FY2022 it is
-      the `Property`, `Individual Income`, `General Sales`, or `Selective Sales`
-      row and state column in Census Table 1.
-    - $P_{s,y}$ is BEA Regional `SAINC1`, row `GeoName = s` and `LineCode = 1`
-      (“Personal income”), using the column named for year $y$.
-    - Census `AMOUNT` is in thousands of dollars; BEA `SAINC1` values are in
-      millions of dollars.
-      Census $y$ is a fiscal year; BEA column $y$ is a calendar year.
+    ```text
+    sales_excise_pct[state, year] =
+        general_sales_pct[state, year] + selective_sales_pct[state, year]
 
-    The implemented component percentages are:
+    total_burden_pct[state, year] =
+        property_pct[state, year]
+        + individual_income_pct[state, year]
+        + sales_excise_pct[state, year]
 
-    $$
-    \begin{aligned}
-    B_{s,y,\mathrm{property}}(\%) &=
-      0.1 \frac{C_{s,y,\mathrm{LF0009}}}{P_{s,y}} \\
-    B_{s,y,\mathrm{individual\ income}}(\%) &=
-      0.1 \frac{C_{s,y,\mathrm{LF0023}}}{P_{s,y}} \\
-    B_{s,y,\mathrm{sales/excise}}(\%) &=
-      0.1 \frac{C_{s,y,\mathrm{LF0011}} + C_{s,y,\mathrm{LF0012}}}{P_{s,y}} \\
-    B_{s,y,\mathrm{total}}(\%) &=
-      B_{s,y,\mathrm{property}} +
-      B_{s,y,\mathrm{individual\ income}} +
-      B_{s,y,\mathrm{sales/excise}}
-    \end{aligned}
-    $$
+    tax_type_pct[state, year] =
+        100 * tax_type_revenue_usd[state, year]
+            / state_personal_income_usd[state, year]
+    ```
 
-    The factor $0.1$ is the unit conversion and percentage multiplier:
-    $100 \times 1{,}000 / 1{,}000{,}000$. Each rank is computed in descending
-    order with ties assigned the minimum rank, so rank 1 is the highest burden.
+    The table rows below are tax types being measured, not data-source names. The
+    columns identify where each tax-revenue amount comes from in each Census data
+    format:
+
+    | Tax type | Census FY2021–FY2022 workbooks | Census FY2023–FY2024 API |
+    | --- | --- | --- |
+    | Property tax | Table 1 `Property` row; state column | `govslocalfin.AMOUNT`; `AGG_DESC=LF0009` (`Taxes - Property`) |
+    | Individual income tax | Table 1 `Individual Income` row; state column | `govslocalfin.AMOUNT`; `AGG_DESC=LF0023` (`Income Taxes - Individual`) |
+    | General sales tax | Table 1 `General Sales` row; state column | `govslocalfin.AMOUNT`; `AGG_DESC=LF0011` (`Taxes - General Sales`) |
+    | Selective sales tax | Table 1 `Selective Sales` row; state column | `govslocalfin.AMOUNT`; `AGG_DESC=LF0012` (`Total Selective Sales`) |
+
+    Source locations: Census [FY2021 Table 1](https://www2.census.gov/programs-surveys/gov-finances/tables/2021/21slsstab1.xlsx),
+    [FY2022 Table 1](https://www2.census.gov/programs-surveys/gov-finances/tables/2022/22slsstab1.xlsx),
+    and [FY2023–FY2024 `govslocalfin` API](https://api.census.gov/data/timeseries/govslocalfin).
+    BEA source file: [Regional `SAINC.zip`](https://apps.bea.gov/regional/zip/SAINC.zip).
+
+    For each API amount, the other filters are `NAME=state`,
+    `GOVTYPE_LABEL=combined state and local`, and `time=Census FY`; the code
+    checks the returned `AGG_DESC_LABEL`. Census amounts are in thousands of
+    dollars. The common denominator for every tax type and year is BEA Regional
+    `SAINC1`: `GeoName=state`, `LineCode=1` (“Personal income”), and the
+    year-named column, in millions of dollars.
+
+    For FY2024 specifically, Census API `time=2024` supplies the numerator and
+    BEA `SAINC1` column `2024` supplies the denominator. Since Census amounts are
+    thousands and BEA values are millions, the tax-type equation in raw units is
+    `tax_type_pct = 0.1 * Census_AMOUNT_thousands / BEA_SAINC1_millions`;
+    for sales/excise, add the general-sales and selective-sales amounts first. The
+    stacked bar chart shows these three resulting tax-type percentages for each
+    state; the total bar length is their sum.
+    Census FY2024 is a government fiscal year, while BEA column 2024 is a
+    calendar year. This is different from the **WalletHub 2024 article edition**,
+    which the notebook maps to Census FY2021. Tax-type and total ranks use
+    descending values and minimum rank for ties, so rank 1 is highest.
 
     ### Source fit and limits
 
@@ -165,7 +185,7 @@ def _(mo):
     one row per state and period. For programmatic use, `comparison_data` contains one
     row per period, state, and source (`WalletHub article` or `Downloaded Census + BEA`).
     Its MultiIndex is (`period`, `census_fy`, `state`, `data_source`) and it can be
-    exported with `comparison_data.reset_index().to_csv(...)`. The article's component
+    exported with `comparison_data.reset_index().to_csv(...)`. The article's tax-type
     ranks are included only when the published table supplies them.
     """)
     return
@@ -952,7 +972,7 @@ def _(BEA_URL, EDITIONS, article_rankings, mo, pd, result_urls, results):
             "Each state and period occupies one row, with WalletHub and independent "
             "Census + BEA values side by side. Burden percentages are displayed to two "
             "decimals; the underlying `comparison_data` retains full precision. Article "
-            "component ranks are blank when the article did not publish them. "
+            "tax-type ranks are blank when the article did not publish them. "
             "`comparison_data` is the long-form MultiIndex DataFrame; use "
             "`comparison_data.reset_index().to_csv(...)` for the full comparison export."
         ),
@@ -975,13 +995,28 @@ def _(LATEST_FY, mo, results):
     mo.stop(LATEST_FY not in results)
     t = results[LATEST_FY].sort_values("total")
     fig, ax = plt.subplots(figsize=(7, 10))
-    ax.barh(t.index, t["property"], label="Property")
-    ax.barh(t.index, t["income"], left=t["property"], label="Income")
-    ax.barh(t.index, t["sales_excise"], left=t["property"] + t["income"], label="Sales & excise")
-    ax.set_xlabel("% of personal income")
-    ax.set_title(f"Tax burden by state, latest Census FY{LATEST_FY}")
+    ax.barh(t.index, t["property"], label="Property tax")
+    ax.barh(t.index, t["income"], left=t["property"], label="Individual income tax")
+    ax.barh(
+        t.index,
+        t["sales_excise"],
+        left=t["property"] + t["income"],
+        label="Sales & excise taxes",
+    )
+    ax.set_xlabel("Tax revenue as % of state personal income")
+    ax.set_title(f"State and local tax revenue by type — Census FY{LATEST_FY}")
     ax.legend(); fig.tight_layout()
-    fig
+    mo.vstack([
+        mo.md(
+            "## Latest-year tax mix by state\n"
+            "Each bar segment is the corresponding state-and-local tax revenue "
+            "divided by that state's BEA personal income, multiplied by 100. "
+            "It is **not** a share of total tax revenue. Sales & excise combines "
+            "Census general-sales and selective-sales revenue; the full bar is "
+            "the sum of property, individual-income, and sales/excise percentages."
+        ),
+        fig,
+    ])
     return
 
 
