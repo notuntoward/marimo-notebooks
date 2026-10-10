@@ -1323,12 +1323,6 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
                 values=trend_year_values, format="d", labelAngle=0
             ),
         )
-        rank_axis = alt.Y(
-            "overall_rank:Q",
-            title="Overall tax-burden rank (1 = highest)",
-            scale=alt.Scale(domain=[1, 50], reverse=True),
-            axis=alt.Axis(values=[1, 10, 20, 30, 40, 50]),
-        )
         state_color = alt.Color(
             "state:N",
             title="Selected state",
@@ -1345,153 +1339,197 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
                 "total_burden_pct:Q", title="Total burden (%)", format=".2f"
             ),
         ]
-        _clicked_states = alt.selection_point(
-            name="clicked_states",
-            fields=["state"],
-            on="click",
-            toggle=True,
-            clear="dblclick",
-            empty=False,
-        )
-        background_lines = alt.Chart(burden_data).mark_line(
-            color="#b7b7b7", strokeWidth=1, opacity=0.55
-        ).encode(
-            x=fiscal_year_axis,
-            y=rank_axis,
-            detail="state:N",
-            tooltip=trend_tooltip,
-        )
-        selected_lines = alt.Chart(highlighted).mark_line(
-            strokeWidth=2.5
-        ).encode(
-            x=fiscal_year_axis,
-            y=rank_axis,
-            detail="state:N",
-            color=state_color,
-            tooltip=trend_tooltip,
-        )
-        selected_points = alt.Chart(highlighted).mark_point(
-            filled=True, size=90, stroke="white", strokeWidth=0.7
-        ).encode(
-            x=fiscal_year_axis,
-            y=rank_axis,
-            color=state_color,
-            tooltip=trend_tooltip,
-        )
-        interest_lines = alt.Chart(_interest_highlighted).mark_line(
-            strokeWidth=4
-        ).encode(
-            x=fiscal_year_axis,
-            y=rank_axis,
-            detail="state:N",
-            color=state_color,
-            tooltip=trend_tooltip,
-        )
-        interest_points = alt.Chart(_interest_highlighted).mark_point(
-            filled=True, size=180, stroke="white", strokeWidth=1.4
-        ).encode(
-            x=fiscal_year_axis,
-            y=rank_axis,
-            color=state_color,
-            tooltip=trend_tooltip,
-        )
-        # Widen the hover target without materially changing the visible chart.
-        background_hit_targets = alt.Chart(burden_data).mark_line(
-            color="#777777", strokeWidth=8, opacity=0.001
-        ).encode(
-            x=fiscal_year_axis,
-            y=rank_axis,
-            detail="state:N",
-            tooltip=trend_tooltip,
-        )
-        clicked_gray_lines = (
-            alt.Chart(_gray_states)
-            .transform_filter(_clicked_states)
-            .mark_line(color="#555555", strokeWidth=2.5, opacity=0.95)
-            .encode(
+
+        def _build_trend_chart(
+            value_field,
+            y_title,
+            y_scale,
+            y_axis_config,
+            selection_name,
+            chart_title,
+            chart_subtitle,
+        ):
+            value_axis = alt.Y(
+                f"{value_field}:Q",
+                title=y_title,
+                scale=y_scale,
+                axis=y_axis_config,
+            )
+            label_value_axis = alt.Y(
+                f"{value_field}:Q",
+                title=None,
+                scale=y_scale,
+                axis=None,
+            )
+            clicked_states = alt.selection_point(
+                name=selection_name,
+                fields=["state"],
+                on="click",
+                toggle="true",
+                clear="dblclick",
+                empty=False,
+            )
+            background_lines = alt.Chart(burden_data).mark_line(
+                color="#b7b7b7", strokeWidth=1, opacity=0.55
+            ).encode(
                 x=fiscal_year_axis,
-                y=rank_axis,
+                y=value_axis,
                 detail="state:N",
                 tooltip=trend_tooltip,
             )
-        )
-        label_rank_axis = alt.Y(
-            "overall_rank:Q",
-            title=None,
-            scale=alt.Scale(domain=[1, 50], reverse=True),
-            axis=None,
-        )
-        selected_label_chart = alt.Chart(endpoint_labels).mark_text(
-            align="left", baseline="middle", fontSize=10
-        ).encode(
-            x=alt.value(0),
-            y=label_rank_axis,
-            color=state_color,
-            text="state:N",
-        )
-        interest_label_chart = alt.Chart(interest_endpoint_labels).mark_text(
-            align="left", baseline="middle", fontSize=13, fontWeight="bold"
-        ).encode(
-            x=alt.value(0),
-            y=label_rank_axis,
-            color=state_color,
-            text="state:N",
-        )
-        clicked_label_chart = (
-            alt.Chart(clicked_endpoint_labels)
-            .transform_filter(_clicked_states)
-            .mark_text(
-                align="left",
-                baseline="middle",
-                fontSize=11,
-                fontWeight="bold",
-                color="#555555",
+            selected_lines = alt.Chart(highlighted).mark_line(
+                strokeWidth=2.5
+            ).encode(
+                x=fiscal_year_axis,
+                y=value_axis,
+                detail="state:N",
+                color=state_color,
+                tooltip=trend_tooltip,
             )
-            .encode(
+            selected_points = alt.Chart(highlighted).mark_point(
+                filled=True, size=90, stroke="white", strokeWidth=0.7
+            ).encode(
+                x=fiscal_year_axis,
+                y=value_axis,
+                color=state_color,
+                tooltip=trend_tooltip,
+            )
+            interest_lines = alt.Chart(_interest_highlighted).mark_line(
+                strokeWidth=4
+            ).encode(
+                x=fiscal_year_axis,
+                y=value_axis,
+                detail="state:N",
+                color=state_color,
+                tooltip=trend_tooltip,
+            )
+            interest_points = alt.Chart(_interest_highlighted).mark_point(
+                filled=True, size=180, stroke="white", strokeWidth=1.4
+            ).encode(
+                x=fiscal_year_axis,
+                y=value_axis,
+                color=state_color,
+                tooltip=trend_tooltip,
+            )
+            # Widen the hover target without materially changing the visible chart.
+            background_hit_targets = alt.Chart(burden_data).mark_line(
+                color="#777777", strokeWidth=8, opacity=0.001
+            ).encode(
+                x=fiscal_year_axis,
+                y=value_axis,
+                detail="state:N",
+                tooltip=trend_tooltip,
+            )
+            clicked_gray_lines = (
+                alt.Chart(_gray_states)
+                .transform_filter(clicked_states)
+                .mark_line(color="#555555", strokeWidth=2.5, opacity=0.95)
+                .encode(
+                    x=fiscal_year_axis,
+                    y=value_axis,
+                    detail="state:N",
+                    tooltip=trend_tooltip,
+                )
+            )
+            selected_label_chart = alt.Chart(endpoint_labels).mark_text(
+                align="left", baseline="middle", fontSize=10
+            ).encode(
                 x=alt.value(0),
-                y=label_rank_axis,
+                y=label_value_axis,
+                color=state_color,
                 text="state:N",
             )
-        )
-        trend_plot = (
-            alt.layer(
-                background_lines,
-                selected_lines,
-                selected_points,
-                interest_lines,
-                interest_points,
-                clicked_gray_lines,
-                background_hit_targets,
+            interest_label_chart = alt.Chart(interest_endpoint_labels).mark_text(
+                align="left", baseline="middle", fontSize=13, fontWeight="bold"
+            ).encode(
+                x=alt.value(0),
+                y=label_value_axis,
+                color=state_color,
+                text="state:N",
             )
-            .properties(width=470, height=560)
-            .resolve_scale(x="shared", y="shared", color="shared")
-            .add_params(_clicked_states)
-        )
-        trend_label_strip = (
-            alt.layer(selected_label_chart, interest_label_chart, clicked_label_chart)
-            .resolve_scale(y="shared", color="shared")
-            .properties(width=130, height=560)
-        )
-        trend_chart = (
-            alt.hconcat(trend_plot, trend_label_strip, spacing=8)
-            .resolve_scale(y="shared", color="shared")
-            .properties(
-                title=alt.TitleParams(
-                    text="Track selected states across Census fiscal years",
-                    subtitle=[
-                        "Gray lines show every state; click one to pin it in dark gray.",
-                        f"States of interest have thicker lines, larger points, and bold labels at FY{last_year}.",
-                        "Rank 1 is at the top.",
-                    ],
-                    anchor="start",
-                ),
+            clicked_label_chart = (
+                alt.Chart(clicked_endpoint_labels)
+                .transform_filter(clicked_states)
+                .mark_text(
+                    align="left",
+                    baseline="middle",
+                    fontSize=11,
+                    fontWeight="bold",
+                    color="#555555",
+                )
+                .encode(
+                    x=alt.value(0),
+                    y=label_value_axis,
+                    text="state:N",
+                )
             )
-            .configure_view(stroke=None)
+            trend_plot = (
+                alt.layer(
+                    background_lines,
+                    selected_lines,
+                    selected_points,
+                    interest_lines,
+                    interest_points,
+                    clicked_gray_lines,
+                    background_hit_targets,
+                )
+                .properties(width=470, height=560)
+                .resolve_scale(x="shared", y="shared", color="shared")
+                .add_params(clicked_states)
+            )
+            trend_label_strip = (
+                alt.layer(
+                    selected_label_chart,
+                    interest_label_chart,
+                    clicked_label_chart,
+                )
+                .resolve_scale(y="shared", color="shared")
+                .properties(width=130, height=560)
+            )
+            return (
+                alt.hconcat(trend_plot, trend_label_strip, spacing=8)
+                .resolve_scale(y="shared", color="shared")
+                .properties(
+                    title=alt.TitleParams(
+                        text=chart_title,
+                        subtitle=chart_subtitle,
+                        anchor="start",
+                    ),
+                )
+                .configure_view(stroke=None)
+            )
+
+        trend_chart = _build_trend_chart(
+            value_field="overall_rank",
+            y_title="Overall tax-burden rank (1 = highest)",
+            y_scale=alt.Scale(domain=[1, 50], reverse=True),
+            y_axis_config=alt.Axis(values=[1, 10, 20, 30, 40, 50]),
+            selection_name="clicked_rank_states",
+            chart_title="Track selected states across Census fiscal years",
+            chart_subtitle=[
+                "Gray lines show every state; click one to pin it in dark gray.",
+                f"States of interest have thicker lines, larger points, and bold labels at FY{last_year}.",
+                "Rank 1 is at the top.",
+            ],
+        )
+        _burden_y_max = float(burden_data["total_burden_pct"].max())
+        burden_trend_chart = _build_trend_chart(
+            value_field="total_burden_pct",
+            y_title="Tax burden (% of state personal income)",
+            y_scale=alt.Scale(domain=[0, _burden_y_max * 1.08], nice=False),
+            y_axis_config=alt.Axis(format=".1f"),
+            selection_name="clicked_burden_states",
+            chart_title="Track state tax burden across Census fiscal years",
+            chart_subtitle=[
+                "Gray lines show every state; click one to pin it in dark gray.",
+                f"States of interest have thicker lines, larger points, and bold labels at FY{last_year}.",
+                "Vertical position shows total tax burden (% of state personal income).",
+            ],
         )
         chart_output = mo.vstack(
             [
                 mo.md(
-                    "## State rank trends\\n"
+                    "## State rank trends\n"
                     "Gray lines show every calculated state. The trend-state picker "
                     "keeps the initial three lowest and three highest mean-rank states; "
                     "states of interest are added automatically. Those states use "
@@ -1499,6 +1537,13 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
                     "independent Census + BEA calculations."
                 ),
                 trend_chart,
+                mo.md(
+                    "## State tax-burden trends\n"
+                    "This second view uses total tax burden (% of state personal income) "
+                    "on the vertical axis. It shares the state pickers, colors, labels, "
+                    "tooltips, and click-to-highlight behavior above."
+                ),
+                burden_trend_chart,
             ]
         )
     chart_output = mo.vstack(
