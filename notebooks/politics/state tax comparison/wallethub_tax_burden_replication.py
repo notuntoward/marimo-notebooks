@@ -12,11 +12,12 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import io, json, os, re, zipfile, pathlib
+    from html.parser import HTMLParser
     import marimo as mo
     import pandas as pd
     import requests
 
-    return io, json, mo, os, pathlib, pd, re, requests, zipfile
+    return HTMLParser, io, json, mo, os, pathlib, pd, re, requests, zipfile
 
 
 @app.cell
@@ -52,11 +53,12 @@ def _(mo):
     WalletHub does not name its input fiscal year or publish a frozen calculation extract,
     so we cannot verify that it used these exact files, revisions, or aggregations.
 
-    The calculations themselves use downloaded Census and BEA data. To assess the
-    source-year match, we compare those calculations with five WalletHub-published state
-    figures per edition, manually transcribed in `FIXTURES` as validation targets. These
-    published figures are the only copied comparison values; they are never calculation
-    inputs. The article-to-data mapping used here is:
+    The calculations themselves use only downloaded Census and BEA data. Separately, the
+    notebook downloads the complete 50-state WalletHub tables from archived article
+    reproductions, then compares each article's figures with the corresponding
+    downloaded-data calculation. The article values are comparison-only and never
+    calculation inputs. Their source URLs are recorded with the output rows. The
+    article-to-data mapping used here is:
 
     | WalletHub article edition | Census fiscal year used |
     | --- | --- |
@@ -64,6 +66,12 @@ def _(mo):
     | 2025 | FY2022 |
     | 2026 | FY2023 |
     | Latest Census data | FY2024 |
+
+    The complete article tables are archived reproductions published by CPA Practice
+    Advisor: [2024](https://www.cpapracticeadvisor.com/2024/12/01/how-the-50-states-rank-by-tax-burden/103495/),
+    [2025](https://www.cpapracticeadvisor.com/2025/04/01/how-the-50-states-rank-by-tax-burden-updated-for-2025/158094/),
+    and [2026](https://www.cpapracticeadvisor.com/2026/03/31/2026-update-how-the-50-states-rank-by-tax-burden/180445/).
+    They reproduce the full WalletHub state tables and are downloaded only for comparison.
 
     **FY2025 Census data are not available yet.** Census currently documents its
     [State and Local Government Finances time series](https://www.census.gov/data/developers/data-sets/govslocalfin.html)
@@ -109,8 +117,12 @@ def _(mo):
     the key from the environment; it does not store the key in the notebook or data cache.
     Raw downloads are cached in the local `data_cache/` folder for subsequent runs.
 
-    WalletHub's published values appear only in `FIXTURES`, as five-state validation
-    examples per edition. They are never inputs to the calculations.
+    The visible comparison table puts WalletHub and Census + BEA values side by side,
+    one row per state and period. For programmatic use, `comparison_data` contains one
+    row per period, state, and source (`WalletHub article` or `Downloaded Census + BEA`).
+    Its MultiIndex is (`period`, `census_fy`, `state`, `data_source`) and it can be
+    exported with `comparison_data.reset_index().to_csv(...)`. The article's component
+    ranks are included only when the published table supplies them.
     """)
     return
 
@@ -130,24 +142,19 @@ def _(pathlib):
     LATEST_FY = 2024  # Census released FY2024 in July 2026.
     REQUESTED_FY = 2025  # Not yet published in Census' current 2017–2024 series.
 
-    # (total, property, income, sales_excise) in %, transcribed from the articles
-    # solely as validation targets.
-    FIXTURES = {
-        "WalletHub 2024 article": {
-            "New York": (12.02, 4.36, 4.63, 3.03), "Hawaii": (11.80, 2.64, 3.82, 5.34),
-            "Washington": (8.04, 2.58, 0.00, 5.46), "Alabama": (7.52, 1.33, 2.01, 4.18),
-            "Alaska": (4.93, 3.54, 0.00, 1.39),
-        },
-        "WalletHub 2025 article": {
-            "Hawaii": (13.92, 2.57, 4.18, 7.17), "New York": (13.56, 4.28, 5.76, 3.52),
-            "Washington": (8.61, 2.64, 0.00, 5.97), "Alabama": (7.99, 1.35, 2.37, 4.27),
-            "Alaska": (4.93, 3.46, 0.00, 1.47),
-        },
-        "WalletHub 2026 article": {
-            "Hawaii": (13.30, 2.62, 3.20, 7.48), "New York": (12.39, 4.22, 4.65, 3.53),
-            "Washington": (8.47, 2.47, 0.13, 5.87), "Alabama": (7.93, 1.40, 2.17, 4.36),
-            "Alaska": (4.92, 3.32, 0.00, 1.60),
-        },
+    ARTICLE_URLS = {
+        "WalletHub 2024 article": (
+            "https://www.cpapracticeadvisor.com/2024/12/01/"
+            "how-the-50-states-rank-by-tax-burden/103495/"
+        ),
+        "WalletHub 2025 article": (
+            "https://www.cpapracticeadvisor.com/2025/04/01/"
+            "how-the-50-states-rank-by-tax-burden-updated-for-2025/158094/"
+        ),
+        "WalletHub 2026 article": (
+            "https://www.cpapracticeadvisor.com/2026/03/31/"
+            "2026-update-how-the-50-states-rank-by-tax-burden/180445/"
+        ),
     }
     STATES = ["Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut",
         "Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa","Kansas",
@@ -156,7 +163,7 @@ def _(pathlib):
         "New Mexico","New York","North Carolina","North Dakota","Ohio","Oklahoma","Oregon",
         "Pennsylvania","Rhode Island","South Carolina","South Dakota","Tennessee","Texas",
         "Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"]
-    return CACHE, EDITIONS, FIXTURES, HEADERS, LATEST_FY, REQUESTED_FY, STATES
+    return ARTICLE_URLS, CACHE, EDITIONS, HEADERS, LATEST_FY, REQUESTED_FY, STATES
 
 
 @app.cell
@@ -184,6 +191,172 @@ def _(CACHE, HEADERS, requests):
 
 
 @app.cell
+def _(ARTICLE_URLS, EDITIONS, HTMLParser, STATES, fetch, pd, re):
+    class ArticleTableParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.tables = []
+            self.table = None
+            self.row = None
+            self.cell = None
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "table" and self.table is None:
+                self.table = []
+            elif tag == "tr" and self.table is not None:
+                self.row = []
+            elif tag in ("td", "th") and self.row is not None:
+                self.cell = []
+
+        def handle_data(self, data):
+            if self.cell is not None:
+                self.cell.append(data)
+
+        def handle_endtag(self, tag):
+            if tag in ("td", "th") and self.cell is not None:
+                self.row.append(" ".join(" ".join(self.cell).split()))
+                self.cell = None
+            elif tag == "tr" and self.row is not None:
+                self.table.append(self.row)
+                self.row = None
+            elif tag == "table" and self.table is not None:
+                self.tables.append(self.table)
+                self.table = None
+
+    required_headers = {
+        "overallrank",
+        "state",
+        "totaltaxburden",
+        "propertytaxburden",
+        "individualincometaxburden",
+        "totalsalesexcisetaxburden",
+    }
+
+    def normalize_header(value):
+        return re.sub(r"[^a-z0-9]", "", value.casefold())
+
+    def parse_burden_cell(value):
+        match = re.fullmatch(
+            r"\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:\(\s*(\d+)\s*\))?\s*",
+            str(value),
+        )
+        if not match:
+            raise ValueError(f"Unexpected article percentage cell: {value!r}")
+        percentage = float(match.group(1))
+        rank = int(match.group(2)) if match.group(2) else pd.NA
+        return percentage, rank
+
+    def parse_article_table(html, edition, url):
+        parser = ArticleTableParser()
+        parser.feed(html)
+        column_names = None
+        rows = None
+        for table in parser.tables:
+            if not table:
+                continue
+            headers = {
+                normalize_header(name): i for i, name in enumerate(table[0])
+            }
+            if required_headers.issubset(headers):
+                column_names = headers
+                rows = table[1:]
+                break
+        if rows is None:
+            raise ValueError(f"No complete 50-state rankings table found at {url}")
+
+        records = []
+        for row in rows:
+            if len(row) <= max(column_names.values()):
+                continue
+            state = row[column_names["state"]].strip()
+            if state not in STATES:
+                continue
+            total, _ = parse_burden_cell(row[column_names["totaltaxburden"]])
+            property_pct, property_rank = parse_burden_cell(
+                row[column_names["propertytaxburden"]]
+            )
+            income_pct, income_rank = parse_burden_cell(
+                row[column_names["individualincometaxburden"]]
+            )
+            sales_pct, sales_rank = parse_burden_cell(
+                row[column_names["totalsalesexcisetaxburden"]]
+            )
+            rank_match = re.search(
+                r"\d+", row[column_names["overallrank"]]
+            )
+            if rank_match is None:
+                raise ValueError(f"Unexpected overall rank for {state}: {row}")
+            records.append({
+                "period": edition,
+                "census_fy": EDITIONS[edition],
+                "state": state,
+                "overall_rank": int(rank_match.group()),
+                "total_burden_pct": total,
+                "property_rank": property_rank,
+                "property_burden_pct": property_pct,
+                "individual_income_rank": income_rank,
+                "individual_income_burden_pct": income_pct,
+                "sales_excise_rank": sales_rank,
+                "sales_excise_burden_pct": sales_pct,
+                "data_source": "WalletHub article",
+                "source_url": url,
+            })
+
+        article = pd.DataFrame(records)
+        if len(article) != 50 or set(article["state"]) != set(STATES):
+            raise ValueError(
+                f"{edition}: expected 50 unique states, found {len(article)} rows."
+            )
+        if article["state"].duplicated().any():
+            raise ValueError(f"{edition}: duplicate state rows in the article table.")
+        for column in (
+            "overall_rank",
+            "property_rank",
+            "individual_income_rank",
+            "sales_excise_rank",
+        ):
+            article[column] = pd.to_numeric(
+                article[column], errors="coerce"
+            ).astype("Int64")
+        return article
+
+    article_frames = []
+    article_errors = {}
+    for edition, url in ARTICLE_URLS.items():
+        try:
+            article_year = edition.split()[1]
+            article_path = fetch(
+                url, f"wallethub_article_rankings_{article_year}.html"
+            )
+            html = article_path.read_text(encoding="utf-8")
+            article_frames.append(parse_article_table(html, edition, url))
+        except Exception as exc:
+            article_errors[edition] = f"{type(exc).__name__}: {exc}"
+
+    article_columns = [
+        "period",
+        "census_fy",
+        "state",
+        "overall_rank",
+        "total_burden_pct",
+        "property_rank",
+        "property_burden_pct",
+        "individual_income_rank",
+        "individual_income_burden_pct",
+        "sales_excise_rank",
+        "sales_excise_burden_pct",
+        "data_source",
+        "source_url",
+    ]
+    article_rankings = (
+        pd.concat(article_frames, ignore_index=True)
+        if article_frames
+        else pd.DataFrame(columns=article_columns)
+    )
+    return article_errors, article_rankings
+
+
+@app.cell
 def _(STATES, fetch, io, pd, re, zipfile):
     BEA_URL = "https://apps.bea.gov/regional/zip/SAINC.zip"
 
@@ -202,7 +375,7 @@ def _(STATES, fetch, io, pd, re, zipfile):
         out.columns = [int(c) for c in out.columns]
         return out
 
-    return (load_personal_income,)
+    return BEA_URL, load_personal_income
 
 
 @app.cell
@@ -375,6 +548,12 @@ def _(load_census_taxes, pd):
         out["total"] = out[["property", "income", "sales_excise"]].sum(axis=1)
         for c in ["total", "property", "income", "sales_excise"]:
             out[f"rank_{c}"] = out[c].rank(ascending=False, method="min").astype(int)
+        out["property_tax_revenue_usd"] = taxes["property"]
+        out["individual_income_tax_revenue_usd"] = taxes["income"]
+        out["general_sales_tax_revenue_usd"] = taxes["general_sales"]
+        out["selective_sales_tax_revenue_usd"] = taxes["selective_sales"]
+        out["sales_excise_tax_revenue_usd"] = taxes["sales_excise"]
+        out["personal_income_usd"] = denom
         return out.sort_values("total", ascending=False), url
 
     def safe_burden(fy, pi):
@@ -387,17 +566,17 @@ def _(load_census_taxes, pd):
 
 
 @app.cell
-def _(load_personal_income, mo):
+def _(BEA_URL, load_personal_income, mo):
     with mo.status.spinner("Downloading BEA personal income..."):
         PI = load_personal_income()
     mo.md(f"BEA personal income loaded: {PI.shape[0]} states, years {PI.columns.min()}–{PI.columns.max()}")
-    return (PI,)
+    return BEA_URL, PI
 
 
 @app.cell
-def _(EDITIONS, FIXTURES, LATEST_FY, PI, REQUESTED_FY, mo, pd, safe_burden):
+def _(EDITIONS, LATEST_FY, PI, REQUESTED_FY, article_rankings, mo, pd, safe_burden):
     def _():
-        results, errors, unavailable, rows = {}, {}, {}, []
+        results, result_urls, errors, unavailable, rows = {}, {}, {}, {}, []
         all_fy = sorted(set(EDITIONS.values()) | {LATEST_FY, REQUESTED_FY})
         with mo.status.spinner("Downloading Census state & local finance tables..."):
             for _fy in all_fy:
@@ -418,50 +597,57 @@ def _(EDITIONS, FIXTURES, LATEST_FY, PI, REQUESTED_FY, mo, pd, safe_burden):
                     errors[_fy] = err
                 else:
                     results[_fy] = res[0]
+                    result_urls[_fy] = res[1]
 
         for ed, _fy in EDITIONS.items():
-            if _fy not in results:
+            article = article_rankings[article_rankings["period"] == ed]
+            if _fy not in results or article.empty:
                 continue
             t = results[_fy]
             diffs = []
-            for st, (tot, prop, inc, sal) in FIXTURES[ed].items():
-                diffs += [
-                    abs(t.loc[st, "total"] - tot),
-                    abs(t.loc[st, "property"] - prop),
-                    abs(t.loc[st, "income"] - inc),
-                    abs(t.loc[st, "sales_excise"] - sal),
-                ]
+            for row in article.itertuples(index=False):
+                diffs.extend([
+                    abs(t.loc[row.state, "total"] - row.total_burden_pct),
+                    abs(t.loc[row.state, "property"] - row.property_burden_pct),
+                    abs(t.loc[row.state, "income"] - row.individual_income_burden_pct),
+                    abs(t.loc[row.state, "sales_excise"] - row.sales_excise_burden_pct),
+                ])
             if diffs:
                 rows.append({
                     "WalletHub edition": ed,
                     "Census fiscal year used": _fy,
                     "max abs. difference (pp)": max(diffs),
                     "mean abs. difference (pp)": sum(diffs) / len(diffs),
-                    "states checked": len(FIXTURES[ed]),
+                    "states checked": len(article),
                 })
         match = pd.DataFrame(rows)
-        return results, errors, unavailable, match
+        return results, result_urls, errors, unavailable, match
 
 
-    results, errors, unavailable, match = _()
-    return errors, match, results, unavailable
+    results, result_urls, errors, unavailable, match = _()
+    return errors, match, results, result_urls, unavailable
 
 
 @app.cell
-def _(errors, match, mo, unavailable):
+def _(article_errors, errors, match, mo, unavailable):
     err_md = "\n".join(f"- FY{k}: `{v[:300]}`" for k, v in errors.items()) or "None"
+    article_err_md = "\n".join(
+        f"- {edition}: `{message[:300]}`"
+        for edition, message in article_errors.items()
+    ) or "None"
     unavailable_md = "\n".join(
         f"- FY{k}: {v}" for k, v in unavailable.items()
     ) or "None"
     mo.vstack([
         mo.md(
             "## Article-year check\n"
-            "The table compares downloaded-source calculations with five published "
-            "state examples per edition. The article does not name its fiscal-year input; "
+            "The table compares downloaded-source calculations with all 50 state values "
+            "published in each article table. The article does not name its fiscal-year input; "
             "the inferred year is the one used for the full rankings below. Small residual "
             "differences can reflect source revisions and rounding."
         ),
         mo.ui.table(match.round(3), selection=None) if len(match) else mo.md("No benchmark results."),
+        mo.md(f"**Article-table download / parse errors:**\n\n{article_err_md}"),
         mo.md(f"**Requested Census year not yet published:**\n\n{unavailable_md}"),
         mo.md(f"**Download / parse errors:**\n\n{err_md}"),
     ])
@@ -469,48 +655,235 @@ def _(errors, match, mo, unavailable):
 
 
 @app.cell
-def _(EDITIONS, LATEST_FY, mo, results):
-    ranking_sections = []
-    output_years = list(EDITIONS.items()) + [("Latest downloaded Census data", LATEST_FY)]
-    for edition, fy in output_years:
-        if fy not in results:
-            continue
-        table = results[fy].copy()
-        table.index.name = "State"
-        table = table.reset_index()
-        columns = [
-            "State", "rank_total", "total", "rank_property", "property",
-            "rank_income", "income", "rank_sales_excise", "sales_excise",
-        ]
-        table = table[columns].rename(columns={
-            "rank_total": "Overall rank",
-            "total": "Overall burden (%)",
-            "rank_property": "Property rank",
-            "property": "Property (%)",
-            "rank_income": "Income rank",
-            "income": "Individual income (%)",
-            "rank_sales_excise": "Sales & excise rank",
-            "sales_excise": "Sales & excise (%)",
-        }).round(2)
-        title = (
-            f"### {edition} — computed from Census fiscal year {fy}"
-            if edition.startswith("WalletHub")
-            else f"### {edition} — fiscal year {fy} (latest downloaded Census data)"
+def _(BEA_URL, EDITIONS, article_rankings, mo, pd, result_urls, results):
+    comparison_columns = [
+        "period",
+        "census_fy",
+        "state",
+        "data_source",
+        "overall_rank",
+        "total_burden_pct",
+        "property_rank",
+        "property_burden_pct",
+        "individual_income_rank",
+        "individual_income_burden_pct",
+        "sales_excise_rank",
+        "sales_excise_burden_pct",
+        "source_url",
+        "income_source_url",
+    ]
+    comparison_records = []
+    for row in article_rankings.to_dict("records"):
+        comparison_records.append({
+            **{name: row.get(name) for name in comparison_columns},
+            "data_source": "WalletHub article",
+            "income_source_url": pd.NA,
+        })
+
+    article_period_by_fy = {fy: edition for edition, fy in EDITIONS.items()}
+    raw_records = []
+    for fy, calculated in results.items():
+        period = article_period_by_fy.get(fy, "Latest Census data")
+        tax_source_url = result_urls[fy]
+        for state, values in calculated.iterrows():
+            comparison_records.append({
+                "period": period,
+                "census_fy": fy,
+                "state": state,
+                "data_source": "Downloaded Census + BEA",
+                "overall_rank": values["rank_total"],
+                "total_burden_pct": values["total"],
+                "property_rank": values["rank_property"],
+                "property_burden_pct": values["property"],
+                "individual_income_rank": values["rank_income"],
+                "individual_income_burden_pct": values["income"],
+                "sales_excise_rank": values["rank_sales_excise"],
+                "sales_excise_burden_pct": values["sales_excise"],
+                "source_url": tax_source_url,
+                "income_source_url": BEA_URL,
+            })
+            raw_records.append({
+                "period": period,
+                "census_fy": fy,
+                "state": state,
+                "property_tax_revenue_usd": values["property_tax_revenue_usd"],
+                "individual_income_tax_revenue_usd": values[
+                    "individual_income_tax_revenue_usd"
+                ],
+                "general_sales_tax_revenue_usd": values[
+                    "general_sales_tax_revenue_usd"
+                ],
+                "selective_sales_tax_revenue_usd": values[
+                    "selective_sales_tax_revenue_usd"
+                ],
+                "sales_excise_tax_revenue_usd": values[
+                    "sales_excise_tax_revenue_usd"
+                ],
+                "personal_income_usd": values["personal_income_usd"],
+                "census_source_url": tax_source_url,
+                "bea_source_url": BEA_URL,
+            })
+
+    comparison_data = pd.DataFrame(comparison_records, columns=comparison_columns)
+    raw_columns = [
+        "period",
+        "census_fy",
+        "state",
+        "property_tax_revenue_usd",
+        "individual_income_tax_revenue_usd",
+        "general_sales_tax_revenue_usd",
+        "selective_sales_tax_revenue_usd",
+        "sales_excise_tax_revenue_usd",
+        "personal_income_usd",
+        "census_source_url",
+        "bea_source_url",
+    ]
+    downloaded_inputs = pd.DataFrame(raw_records, columns=raw_columns)
+
+    period_order = [*EDITIONS, "Latest Census data"]
+    source_order = ["WalletHub article", "Downloaded Census + BEA"]
+    comparison_data["period"] = pd.Categorical(
+        comparison_data["period"], categories=period_order, ordered=True
+    )
+    comparison_data["data_source"] = pd.Categorical(
+        comparison_data["data_source"], categories=source_order, ordered=True
+    )
+    comparison_data["census_fy"] = pd.to_numeric(
+        comparison_data["census_fy"], errors="coerce"
+    ).astype("Int64")
+    for rank_column in (
+        "overall_rank",
+        "property_rank",
+        "individual_income_rank",
+        "sales_excise_rank",
+    ):
+        comparison_data[rank_column] = pd.to_numeric(
+            comparison_data[rank_column], errors="coerce"
+        ).astype("Int64")
+    comparison_data.sort_values(
+        ["period", "census_fy", "state", "data_source"],
+        inplace=True,
+        ignore_index=True,
+    )
+
+    downloaded_inputs["period"] = pd.Categorical(
+        downloaded_inputs["period"], categories=period_order, ordered=True
+    )
+    downloaded_inputs["census_fy"] = pd.to_numeric(
+        downloaded_inputs["census_fy"], errors="coerce"
+    ).astype("Int64")
+    downloaded_inputs.sort_values(
+        ["period", "census_fy", "state"], inplace=True, ignore_index=True
+    )
+
+    comparison_data = comparison_data.set_index(
+        ["period", "census_fy", "state", "data_source"]
+    )
+    downloaded_inputs = downloaded_inputs.set_index(
+        ["period", "census_fy", "state"]
+    )
+    comparison_metrics = [
+        "overall_rank",
+        "total_burden_pct",
+        "property_rank",
+        "property_burden_pct",
+        "individual_income_rank",
+        "individual_income_burden_pct",
+        "sales_excise_rank",
+        "sales_excise_burden_pct",
+    ]
+    comparison_view = comparison_data.reset_index().pivot(
+        index=["period", "census_fy", "state"],
+        columns="data_source",
+        values=comparison_metrics,
+    )
+    source_labels = {
+        "WalletHub article": "WalletHub",
+        "Downloaded Census + BEA": "Census + BEA",
+    }
+    comparison_view = comparison_view.reindex(
+        columns=pd.MultiIndex.from_product(
+            [comparison_metrics, source_labels]
         )
-        ranking_sections.extend([
-            mo.md(title),
-            mo.ui.table(table, selection=None, page_size=50),
-        ])
+    )
+    metric_labels = {
+        "overall_rank": "overall rank",
+        "total_burden_pct": "total burden (%)",
+        "property_rank": "property rank",
+        "property_burden_pct": "property burden (%)",
+        "individual_income_rank": "income rank",
+        "individual_income_burden_pct": "income burden (%)",
+        "sales_excise_rank": "sales/excise rank",
+        "sales_excise_burden_pct": "sales/excise burden (%)",
+    }
+    comparison_view.columns = [
+        f"{source_labels[source]} {metric_labels[metric]}"
+        for metric, source in comparison_view.columns
+    ]
+    comparison_view = comparison_view.reset_index()
+    comparison_view.sort_values(
+        ["period", "census_fy", "state"], inplace=True, ignore_index=True
+    )
+    comparison_view_columns = {
+        column: pd.to_numeric(comparison_view[column], errors="coerce").astype(
+            "Int64"
+        )
+        for column in (
+            "WalletHub overall rank",
+            "WalletHub property rank",
+            "WalletHub income rank",
+            "WalletHub sales/excise rank",
+            "Census + BEA overall rank",
+            "Census + BEA property rank",
+            "Census + BEA income rank",
+            "Census + BEA sales/excise rank",
+        )
+    }
+    for column, values in comparison_view_columns.items():
+        comparison_view[column] = values
+    burden_columns = [
+        column
+        for column in comparison_view
+        if column.endswith("burden (%)")
+    ]
+    comparison_view[burden_columns] = comparison_view[burden_columns].round(2)
+    input_view = downloaded_inputs.reset_index().drop(
+        columns=["census_source_url", "bea_source_url"]
+    )
+    amount_columns = [
+        "property_tax_revenue_usd",
+        "individual_income_tax_revenue_usd",
+        "general_sales_tax_revenue_usd",
+        "selective_sales_tax_revenue_usd",
+        "sales_excise_tax_revenue_usd",
+        "personal_income_usd",
+    ]
+    input_view[amount_columns] = input_view[amount_columns].apply(
+        lambda column: column.map(
+            lambda amount: f"${amount:,.0f}" if pd.notna(amount) else ""
+        )
+    )
     mo.vstack([
         mo.md(
-            "## Recomputed rankings\n"
-            "Rank 1 is the highest burden. Each article-year table is shown separately; "
-            "FY2024 is the latest published calculation. The requested FY2025 Census "
-            "calculation is pending the Census data release; see the availability note above."
+            "## Complete article and downloaded-data comparison\n"
+            "Each state and period occupies one row, with WalletHub and independent "
+            "Census + BEA values side by side. Burden percentages are displayed to two "
+            "decimals; the underlying `comparison_data` retains full precision. Article "
+            "component ranks are blank when the article did not publish them. "
+            "`comparison_data` is the long-form MultiIndex DataFrame; use "
+            "`comparison_data.reset_index().to_csv(...)` for the full comparison export."
         ),
-        *ranking_sections,
+        mo.ui.table(comparison_view, selection=None, page_size=200),
+        mo.md(
+            "## Raw downloaded inputs\n"
+            "Census revenue amounts and BEA personal income are shown in dollars with "
+            "commas; the underlying `downloaded_inputs` DataFrame remains numeric. "
+            "The `downloaded_inputs` MultiIndex is `(period, census_fy, state)`; source "
+            "URLs remain available in the DataFrame."
+        ),
+        mo.ui.table(input_view, selection=None, page_size=200),
     ])
-    return
+    return comparison_data, downloaded_inputs
 
 
 @app.cell

@@ -18,8 +18,8 @@ the Census fiscal year identifies the source observations used in that calculati
 The historical article years are informed mappings, not confirmed WalletHub input
 vintages. WalletHub does not name the source fiscal year or publish an edition-frozen
 calculation file. The assignments are supported by source-release timing and by
-comparing the notebook's downloaded-data results with five published WalletHub state
-examples per edition.
+comparing the notebook's downloaded-data results with all 50 states in each published
+article table.
 
 ## Requested Census FY2025 analysis
 
@@ -54,13 +54,38 @@ predates FY2024 data, released in July 2026.
   income tax); and general sales plus selective sales taxes. This follows the
   [Tax Policy Center's series definitions](https://state-local-finance-data.taxpolicycenter.org/help/revenue.html),
   which correspond to WalletHub's described components.
+- **WalletHub article values:** the complete 50-state rankings are downloaded from the
+  archived article reproductions for [2024](https://www.cpapracticeadvisor.com/2024/12/01/how-the-50-states-rank-by-tax-burden/103495/),
+  [2025](https://www.cpapracticeadvisor.com/2025/04/01/how-the-50-states-rank-by-tax-burden-updated-for-2025/158094/),
+  and [2026](https://www.cpapracticeadvisor.com/2026/03/31/2026-update-how-the-50-states-rank-by-tax-burden/180445/).
+  They are comparison values only; they are never inputs to the Census/BEA calculation.
 
 For each state, the calculation divides each combined state-and-local tax-revenue
 category by state personal income, then sums the three shares for the overall burden.
-The raw Census and BEA values are downloaded and used in the calculations. WalletHub
-figures appear only as validation examples in the notebook; they do not determine any
-burden percentage or rank. The 2025 validation examples are transcribed from the
-[published 2025 table](https://www.cpapracticeadvisor.com/2025/04/01/how-the-50-states-rank-by-tax-burden-updated-for-2025/158094/).
+The raw Census and BEA values are downloaded and used in the calculations. The article
+values are downloaded separately so their complete published rankings can be compared
+against the independent calculations.
+
+## Full state tables
+
+The notebook displays the state-by-period comparison with WalletHub and downloaded
+Census + BEA values side by side. Each row is one state and period, with overall and
+component percentages and ranks. The 2025 article does not publish component subranks,
+so those article cells remain missing rather than being inferred.
+
+For programmatic use, `comparison_data` is the long-form MultiIndex DataFrame with one
+row per period, state, and source. Its index is
+`(period, census_fy, state, data_source)`; `data_source` distinguishes `WalletHub article`
+from `Downloaded Census + BEA`. Burden percentages retain full precision in this
+DataFrame; the visual table rounds them to two decimal places.
+
+The separate `downloaded_inputs` DataFrame is indexed by `(period, census_fy, state)`
+and contains the Census property, individual-income, general-sales, and selective-sales
+receipts; total sales/excise receipts; and BEA personal income. Monetary columns are
+numeric dollars in the DataFrame; the visual table formats them with dollar signs and
+commas. Both DataFrames retain source URLs and can be exported from the notebook with
+`comparison_data.reset_index().to_csv(...)` or
+`downloaded_inputs.reset_index().to_csv(...)`.
 
 This is a replication of a tax-revenue-to-personal-income ratio, not a household tax
 incidence estimate. Census records revenue by the location of state and local
@@ -98,11 +123,10 @@ provide unpublished data.
 ## Readable report
 
 The [HTML export](exports/wallethub_tax_burden_replication.html) is a browser-readable
-snapshot of the notebook with its code and rendered outputs. This snapshot was
-generated without `CENSUS_API_KEY`: it shows the FY2021/FY2022 rankings, API-key
-messages for FY2023/FY2024, and an explicit FY2025-not-yet-published status. With an
-API key, rerun the export to include FY2023/FY2024 results; FY2025 cannot be computed
-until Census publishes its data.
+snapshot of the notebook with its code and rendered outputs. The HTML report is
+regenerated along with the notebook so it includes the combined state tables. Without
+`CENSUS_API_KEY`, API-key messages appear for FY2023/FY2024; FY2025 is separately marked
+as not yet published.
 
 After setting the key, regenerate the report with:
 
