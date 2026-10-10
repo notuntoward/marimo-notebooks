@@ -1273,9 +1273,8 @@ def _(burden_data, mo):
     state_picker = mo.ui.multiselect(
         options=state_options,
         value=initial_highlights,
-        label="Highlight states (choose a few by name)",
+        label="Secondary states (top/bottom 3 mean ranks by default)",
     )
-    state_picker
     return (state_picker,)
 
 
@@ -1292,6 +1291,9 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
         highlighted = burden_data.loc[
             burden_data["state"].isin(_highlighted_states)
         ].copy()
+        _gray_states = burden_data.loc[
+            ~burden_data["state"].isin(_highlighted_states)
+        ].copy()
         _interest_highlighted = burden_data.loc[
             burden_data["state"].isin(_interest_states)
         ].copy()
@@ -1303,12 +1305,15 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
         interest_endpoint_labels = _interest_highlighted.loc[
             _interest_highlighted["census_fy"].eq(last_year)
         ]
+        clicked_endpoint_labels = _gray_states.loc[
+            _gray_states["census_fy"].eq(last_year)
+        ]
 
         trend_year_values = sorted(burden_data["census_fy"].unique())
-        # Keep the first year beside the y-axis and reserve label room after the last.
+        # Keep the first year beside the y-axis; labels occupy a separate strip.
         trend_x_domain = [
             trend_year_values[0] - 0.05,
-            trend_year_values[-1] + 0.75,
+            trend_year_values[-1],
         ]
         fiscal_year_axis = alt.X(
             "census_fy:Q",
@@ -1340,12 +1345,21 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
                 "total_burden_pct:Q", title="Total burden (%)", format=".2f"
             ),
         ]
+        _clicked_states = alt.selection_point(
+            name="clicked_states",
+            fields=["state"],
+            on="click",
+            toggle=True,
+            clear="dblclick",
+            empty=False,
+        )
         background_lines = alt.Chart(burden_data).mark_line(
             color="#b7b7b7", strokeWidth=1, opacity=0.55
         ).encode(
             x=fiscal_year_axis,
             y=rank_axis,
             detail="state:N",
+            tooltip=trend_tooltip,
         )
         selected_lines = alt.Chart(highlighted).mark_line(
             strokeWidth=2.5
@@ -1354,6 +1368,7 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
             y=rank_axis,
             detail="state:N",
             color=state_color,
+            tooltip=trend_tooltip,
         )
         selected_points = alt.Chart(highlighted).mark_point(
             filled=True, size=90, stroke="white", strokeWidth=0.7
@@ -1370,6 +1385,7 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
             y=rank_axis,
             detail="state:N",
             color=state_color,
+            tooltip=trend_tooltip,
         )
         interest_points = alt.Chart(_interest_highlighted).mark_point(
             filled=True, size=180, stroke="white", strokeWidth=1.4
@@ -1379,46 +1395,98 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
             color=state_color,
             tooltip=trend_tooltip,
         )
-        selected_labels = alt.Chart(endpoint_labels).mark_text(
-            align="left", dx=7, fontSize=10
+        # Widen the hover target without materially changing the visible chart.
+        background_hit_targets = alt.Chart(burden_data).mark_line(
+            color="#777777", strokeWidth=8, opacity=0.001
         ).encode(
             x=fiscal_year_axis,
             y=rank_axis,
-            color=state_color,
-            text="state:N",
+            detail="state:N",
+            tooltip=trend_tooltip,
         )
-        interest_labels = alt.Chart(interest_endpoint_labels).mark_text(
-            align="left", dx=9, fontSize=13, fontWeight="bold"
+        clicked_gray_lines = (
+            alt.Chart(_gray_states)
+            .transform_filter(_clicked_states)
+            .mark_line(color="#555555", strokeWidth=2.5, opacity=0.95)
+            .encode(
+                x=fiscal_year_axis,
+                y=rank_axis,
+                detail="state:N",
+                tooltip=trend_tooltip,
+            )
+        )
+        label_rank_axis = alt.Y(
+            "overall_rank:Q",
+            title=None,
+            scale=alt.Scale(domain=[1, 50], reverse=True),
+            axis=None,
+        )
+        selected_label_chart = alt.Chart(endpoint_labels).mark_text(
+            align="left", baseline="middle", fontSize=10
         ).encode(
-            x=fiscal_year_axis,
-            y=rank_axis,
+            x=alt.value(0),
+            y=label_rank_axis,
             color=state_color,
             text="state:N",
         )
-        trend_chart = (
+        interest_label_chart = alt.Chart(interest_endpoint_labels).mark_text(
+            align="left", baseline="middle", fontSize=13, fontWeight="bold"
+        ).encode(
+            x=alt.value(0),
+            y=label_rank_axis,
+            color=state_color,
+            text="state:N",
+        )
+        clicked_label_chart = (
+            alt.Chart(clicked_endpoint_labels)
+            .transform_filter(_clicked_states)
+            .mark_text(
+                align="left",
+                baseline="middle",
+                fontSize=11,
+                fontWeight="bold",
+                color="#555555",
+            )
+            .encode(
+                x=alt.value(0),
+                y=label_rank_axis,
+                text="state:N",
+            )
+        )
+        trend_plot = (
             alt.layer(
                 background_lines,
                 selected_lines,
                 selected_points,
                 interest_lines,
                 interest_points,
-                selected_labels,
-                interest_labels,
+                clicked_gray_lines,
+                background_hit_targets,
             )
+            .properties(width=470, height=560)
+            .resolve_scale(x="shared", y="shared", color="shared")
+            .add_params(_clicked_states)
+        )
+        trend_label_strip = (
+            alt.layer(selected_label_chart, interest_label_chart, clicked_label_chart)
+            .resolve_scale(y="shared", color="shared")
+            .properties(width=130, height=560)
+        )
+        trend_chart = (
+            alt.hconcat(trend_plot, trend_label_strip, spacing=8)
+            .resolve_scale(y="shared", color="shared")
             .properties(
-                width=640,
-                height=560,
                 title=alt.TitleParams(
                     text="Track selected states across Census fiscal years",
                     subtitle=[
-                        "Gray lines show every calculated state; selected states are drawn in color.",
+                        "Gray lines show every state; click one to pin it in dark gray.",
                         f"States of interest have thicker lines, larger points, and bold labels at FY{last_year}.",
                         "Rank 1 is at the top.",
                     ],
                     anchor="start",
                 ),
             )
-            .resolve_scale(x="shared", y="shared", color="shared")
+            .configure_view(stroke=None)
         )
         chart_output = mo.vstack(
             [
@@ -1436,7 +1504,13 @@ def _(alt, burden_data, mo, state_picker, states_of_interest):
     chart_output = mo.vstack(
         [
             mo.md(
-                "## States of interest\n"
+                "## State controls\n"
+                "Click a gray trend line to emphasize it; click it again to clear the highlight."
+            ),
+            mo.md("### Secondary states"),
+            state_picker,
+            mo.md(
+                "### States of interest\n"
                 "Choose one or more states below. This updates the trend, both bar charts, "
                 "and bold table rows."
             ),
