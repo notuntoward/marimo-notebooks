@@ -11,6 +11,7 @@ __pycache__/
 __marimo__/
 
 # Local data and generated artifacts
+data_cache/
 data/raw/
 data/derived/
 !data/raw/.gitkeep

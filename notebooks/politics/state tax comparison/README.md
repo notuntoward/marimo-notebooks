@@ -164,15 +164,24 @@ and minimum rank for ties, so rank 1 is highest.
 
 ## Charts
 
-The notebook's rank/value trend graphic uses one panel for published WalletHub
-article rankings and one for the independent Census + BEA calculations. Each line
-connects a state's overall rank across Census fiscal years; rank 1 (highest burden)
-is at the top. Point color shows the total tax burden as a percentage of personal
-income. Hover over a point to see its state, article edition or coverage label,
-fiscal year, rank, and exact burden value. Click a point to highlight that state's
-line across both panels; double-click to clear the highlight. WalletHub article
-years are mapped to estimated fiscal years as described above, so the panels are
-not claims about WalletHub's undisclosed data vintage.
+The notebook first displays a state-by-year table of overall rank and total burden
+(formatted `rank / burden (%)`), sorted by each state's average rank across the
+available independent Census + BEA years. A second table shows the latest configured
+year's rank, total burden, individual tax-type shares, and BEA personal income.
+
+The rank-trend chart shows all calculated states as thin gray reference lines.
+Choose states by name in its multiselect to highlight their tracks; the selected
+states have larger points, hover tooltips, and labels at the last available year.
+The initial selection is the three states with the lowest mean ranks and the three
+with the highest mean ranks. Rank 1 (highest burden) is at the top. This chart uses
+only the independent Census + BEA calculations, not WalletHub article ranks.
+
+FY2024 is the latest Census fiscal year currently included in the notebook and is
+calculated from Census FY2024 tax collections and BEA 2024 personal income when the
+API data load succeeds. It is not a WalletHub article edition, so there is no
+corresponding WalletHub article rank for FY2024. FY2023 and FY2024 require
+`CENSUS_API_KEY`; if FY2024 cannot be loaded, the notebook displays the recorded
+calculation error instead of implying the year is unavailable or silently dropping it.
 
 The latest-year stacked bar chart shows property, individual income, general sales,
 and selective sales separately. Every segment is the corresponding state-and-local
@@ -185,7 +194,9 @@ when comparing with WalletHub's sales/excise category.
 The notebook displays the state-by-period comparison with WalletHub and downloaded
 Census + BEA values side by side. Each row is one state and period, with overall and
 tax-type percentages and ranks. The 2025 article does not publish tax-type subranks,
-so those article cells remain missing rather than being inferred.
+so those article cells remain missing rather than being inferred. The separate
+rank/value tables and trend chart use one calculated state-year DataFrame; the tables
+are derived from it with pivots and filters rather than separate calculations.
 
 For programmatic use, `comparison_data` is the long-form MultiIndex DataFrame with one
 row per period, state, and source. Its index is
@@ -237,10 +248,10 @@ provide unpublished data.
 ## Readable report
 
 The [HTML export](exports/wallethub_tax_burden_replication.html) is a browser-readable
-snapshot of the notebook with its code and rendered outputs. The HTML report is
-regenerated along with the notebook so it includes the combined state tables. Without
-`CENSUS_API_KEY`, API-key messages appear for FY2023/FY2024; FY2025 is separately marked
-as not yet published.
+snapshot of the notebook with its code and rendered outputs; it is not updated
+automatically when the source notebook changes. Regenerate it after notebook edits
+using the command below. Without `CENSUS_API_KEY`, API-key messages appear for
+FY2023/FY2024; FY2025 is separately marked as not yet published.
 
 After setting the key, regenerate the report with:
 

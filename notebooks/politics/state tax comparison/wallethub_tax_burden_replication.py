@@ -59,8 +59,8 @@ def _(mo):
     revenue. WalletHub reports three categories: property tax, individual income
     tax, and sales/excise tax. The latest-year stacked bar chart separates the latter
     into its two underlying Census tax types (general sales and selective sales), so
-    it displays all four tax types individually. A separate rank/value chart traces
-    each state's overall burden over the available years:
+    it displays all four tax types individually. The state tables and selectable
+    trend chart below use the independent Census + BEA calculations:
 
     ```text
     sales_excise_pct[state, year] =
@@ -997,95 +997,296 @@ def _(BEA_URL, EDITIONS, article_rankings, mo, pd, result_urls, results):
 
 
 @app.cell
-def _(alt, comparison_data, pd):
-    trend_data = comparison_data.reset_index()
-    trend_data = trend_data.loc[
-        trend_data["overall_rank"].notna()
-        & trend_data["total_burden_pct"].notna()
-        & trend_data["census_fy"].notna()
-    ].copy()
-    trend_data["overall_rank"] = pd.to_numeric(
-        trend_data["overall_rank"], errors="raise"
-    ).astype(int)
-    trend_data["total_burden_pct"] = pd.to_numeric(
-        trend_data["total_burden_pct"], errors="raise"
-    )
-    trend_data["census_fy"] = pd.to_numeric(
-        trend_data["census_fy"], errors="raise"
-    ).astype(int)
+def _(LATEST_FY, errors, mo, pd, results):
+    calculated_columns = {
+        "rank_total": "overall_rank",
+        "total": "total_burden_pct",
+        "property": "property_tax_pct",
+        "income": "individual_income_tax_pct",
+        "general_sales": "general_sales_tax_pct",
+        "selective_sales": "selective_sales_tax_pct",
+        "sales_excise": "sales_excise_tax_pct",
+        "rank_property": "property_tax_rank",
+        "rank_income": "individual_income_tax_rank",
+        "rank_sales_excise": "sales_excise_tax_rank",
+        "personal_income_usd": "personal_income_usd",
+    }
+    if results:
+        burden_data = (
+            pd.concat(
+                {
+                    fy: frame.rename_axis("state")
+                    for fy, frame in results.items()
+                },
+                names=["census_fy", "state"],
+            )
+            .reset_index()
+            .rename(columns=calculated_columns)
+        )
+        burden_data["census_fy"] = pd.to_numeric(
+            burden_data["census_fy"], errors="raise"
+        ).astype(int)
+        burden_data["overall_rank"] = pd.to_numeric(
+            burden_data["overall_rank"], errors="raise"
+        ).astype(int)
 
-    state_highlight = alt.selection_point(
-        fields=["state"], on="click", clear="dblclick", name="highlight_state"
-    )
-    trend_tooltip = [
-        alt.Tooltip("state:N", title="State"),
-        alt.Tooltip("period:N", title="Article edition / coverage"),
-        alt.Tooltip("census_fy:O", title="Census fiscal year"),
-        alt.Tooltip("overall_rank:Q", title="Overall rank", format=".0f"),
-        alt.Tooltip(
-            "total_burden_pct:Q", title="Total burden (%)", format=".2f"
-        ),
-    ]
-    rank_axis = alt.Y(
-        "overall_rank:Q",
-        title="Overall tax-burden rank (1 = highest)",
-        scale=alt.Scale(domain=[1, 50], reverse=True),
-        axis=alt.Axis(values=[1, 10, 20, 30, 40, 50]),
-    )
-    fiscal_year_axis = alt.X(
-        "census_fy:O",
-        title="Census fiscal year",
-        sort="ascending",
-        axis=alt.Axis(labelAngle=0),
-    )
-    rank_lines = alt.Chart(trend_data).mark_line(strokeWidth=1).encode(
-        x=fiscal_year_axis,
-        y=rank_axis,
-        detail="state:N",
-        color=alt.value("#777777"),
-        opacity=alt.condition(
-            state_highlight, alt.value(0.85), alt.value(0.12)
-        ),
-    )
-    rank_points = alt.Chart(trend_data).mark_point(
-        filled=True, size=48, stroke="white", strokeWidth=0.4
-    ).encode(
-        x=fiscal_year_axis,
-        y=rank_axis,
-        color=alt.Color(
-            "total_burden_pct:Q",
-            title="Total burden (%)",
-            scale=alt.Scale(scheme="viridis"),
-        ),
-        opacity=alt.condition(
-            state_highlight, alt.value(1), alt.value(0.15)
-        ),
-        tooltip=trend_tooltip,
-    )
-    trend_chart = (
-        alt.layer(rank_lines, rank_points)
-        .properties(width=760, height=260)
-        .add_params(state_highlight)
-        .facet(
-            row=alt.Row(
-                "data_source:N",
-                title=None,
-                sort=["WalletHub article", "Downloaded Census + BEA"],
-            )
+        average_ranks = (
+            burden_data.groupby("state", as_index=False)["overall_rank"]
+            .mean()
+            .rename(columns={"overall_rank": "Average rank"})
+            .sort_values(["Average rank", "state"], ignore_index=True)
         )
-        .resolve_scale(x="shared", y="shared", color="shared")
-        .properties(
-            title=alt.TitleParams(
-                text="State tax burden over time: rank and value",
-                subtitle=[
-                    "Vertical position is overall rank (1 = highest); point color is total burden as a percent of personal income.",
-                    "WalletHub article editions are matched to estimated Census fiscal years; Census + BEA shows independent calculations.",
-                ],
-                anchor="start",
-            )
+        state_order = average_ranks["state"].tolist()
+        year_order = sorted(burden_data["census_fy"].unique())
+        burden_data["rank_and_burden"] = (
+            burden_data["overall_rank"].astype(str)
+            + " / "
+            + burden_data["total_burden_pct"].map(lambda value: f"{value:.2f}%")
         )
+        yearly_table = burden_data.pivot(
+            index="state",
+            columns="census_fy",
+            values="rank_and_burden",
+        ).reindex(index=state_order, columns=year_order)
+        yearly_table.columns = [f"FY{year}" for year in year_order]
+        yearly_table.insert(
+            0,
+            "Average rank",
+            average_ranks.set_index("state").reindex(state_order)["Average rank"].round(1),
+        )
+        yearly_table = yearly_table.reset_index().rename(
+            columns={"state": "State"}
+        )
+        yearly_output = mo.ui.table(yearly_table, selection=None, page_size=50)
+    else:
+        burden_data = pd.DataFrame(
+            columns=["census_fy", "state", *calculated_columns.values()]
+        )
+        yearly_output = mo.md(
+            "No Census + BEA state-year calculations succeeded, so the rank table "
+            "cannot be built. See the download / parse errors above."
+        )
+
+    latest_year_data = burden_data.loc[
+        burden_data["census_fy"].eq(LATEST_FY)
+    ].copy()
+    if latest_year_data.empty:
+        latest_error = errors.get(
+            LATEST_FY, "No complete Census + BEA calculation was returned."
+        ).replace("`", "'")
+        latest_output = mo.md(
+            f"**FY{LATEST_FY} has no calculated state ranks in this run.** "
+            f"FY{LATEST_FY} is the latest Census year configured here, but its "
+            f"Census + BEA calculation did not complete: `{latest_error}`. "
+            f"The available WalletHub article editions do not provide a rank for FY{LATEST_FY}."
+        )
+    else:
+        latest_table = latest_year_data.sort_values(
+            ["overall_rank", "state"]
+        )[
+            [
+                "overall_rank",
+                "total_burden_pct",
+                "state",
+                "property_tax_pct",
+                "individual_income_tax_pct",
+                "general_sales_tax_pct",
+                "selective_sales_tax_pct",
+                "personal_income_usd",
+            ]
+        ].rename(
+            columns={
+                "overall_rank": "Overall rank",
+                "total_burden_pct": "Total burden (%)",
+                "state": "State",
+                "property_tax_pct": "Property tax (%)",
+                "individual_income_tax_pct": "Individual income tax (%)",
+                "general_sales_tax_pct": "General sales tax (%)",
+                "selective_sales_tax_pct": "Selective sales tax (%)",
+                "personal_income_usd": "BEA personal income ($)",
+            }
+        )
+        percentage_columns = [
+            "Total burden (%)",
+            "Property tax (%)",
+            "Individual income tax (%)",
+            "General sales tax (%)",
+            "Selective sales tax (%)",
+        ]
+        latest_table[percentage_columns] = latest_table[percentage_columns].apply(
+            lambda column: column.map(lambda value: f"{value:.2f}%")
+        )
+        latest_table["BEA personal income ($)"] = latest_table[
+            "BEA personal income ($)"
+        ].map(lambda value: f"${value:,.0f}")
+        latest_output = mo.ui.table(latest_table, selection=None, page_size=50)
+
+    if LATEST_FY in results:
+        latest_status = mo.md(
+            f"FY{LATEST_FY} is calculated from Census state-and-local tax "
+            f"collections and BEA {LATEST_FY} personal income. This is an "
+            "independent Census + BEA rank, not a WalletHub article rank."
+        )
+    else:
+        latest_status = mo.md(
+            f"FY{LATEST_FY} is the latest Census year configured in this notebook, "
+            "but no rank is available in this run; the reason is shown below."
+        )
+
+    mo.vstack(
+        [
+            mo.md(
+                "## Tax-burden rank and value by state\\n"
+                "Each fiscal-year column shows **overall rank / total burden (%)**. "
+                "States are sorted by their mean overall rank across the available "
+                "Census + BEA years (rank 1 is the highest burden)."
+            ),
+            yearly_output,
+            mo.md(f"## FY{LATEST_FY} state tax burden and inputs"),
+            latest_status,
+            latest_output,
+        ]
     )
-    trend_chart
+    return (burden_data,)
+
+
+@app.cell
+def _(burden_data, mo):
+    if burden_data.empty:
+        state_options = []
+        initial_highlights = []
+    else:
+        mean_rank_order = (
+            burden_data.groupby("state", as_index=False)["overall_rank"]
+            .mean()
+            .rename(columns={"overall_rank": "mean_rank"})
+            .sort_values(["mean_rank", "state"], ignore_index=True)
+        )
+        state_options = sorted(burden_data["state"].unique())
+        initial_highlights = [
+            *mean_rank_order.head(3)["state"],
+            *mean_rank_order.tail(3)["state"],
+        ]
+
+    state_picker = mo.ui.multiselect(
+        options=state_options,
+        value=initial_highlights,
+        label="Highlight states (choose a few by name)",
+    )
+    state_picker
+    return (state_picker,)
+
+
+@app.cell
+def _(alt, burden_data, mo, state_picker):
+    if burden_data.empty:
+        chart_output = mo.md(
+            "The state trend chart is unavailable because no Census + BEA "
+            "state-year calculations succeeded."
+        )
+    else:
+        highlighted = burden_data.loc[
+            burden_data["state"].isin(state_picker.value)
+        ].copy()
+        last_year = burden_data["census_fy"].max()
+        endpoint_labels = highlighted.loc[
+            highlighted["census_fy"].eq(last_year)
+        ]
+
+        fiscal_year_axis = alt.X(
+            "census_fy:O",
+            title="Census fiscal year",
+            sort="ascending",
+            scale=alt.Scale(padding=0.7),
+            axis=alt.Axis(labelAngle=0),
+        )
+        rank_axis = alt.Y(
+            "overall_rank:Q",
+            title="Overall tax-burden rank (1 = highest)",
+            scale=alt.Scale(domain=[1, 50], reverse=True),
+            axis=alt.Axis(values=[1, 10, 20, 30, 40, 50]),
+        )
+        state_color = alt.Color(
+            "state:N",
+            title="Selected state",
+            scale=alt.Scale(scheme="tableau20"),
+            legend=None,
+        )
+        trend_tooltip = [
+            alt.Tooltip("state:N", title="State"),
+            alt.Tooltip("census_fy:O", title="Census fiscal year"),
+            alt.Tooltip("overall_rank:Q", title="Overall rank", format=".0f"),
+            alt.Tooltip(
+                "total_burden_pct:Q", title="Total burden (%)", format=".2f"
+            ),
+        ]
+        background_lines = alt.Chart(burden_data).mark_line(
+            color="#b7b7b7", strokeWidth=1, opacity=0.55
+        ).encode(
+            x=fiscal_year_axis,
+            y=rank_axis,
+            detail="state:N",
+        )
+        selected_lines = alt.Chart(highlighted).mark_line(
+            strokeWidth=2.5
+        ).encode(
+            x=fiscal_year_axis,
+            y=rank_axis,
+            detail="state:N",
+            color=state_color,
+        )
+        selected_points = alt.Chart(highlighted).mark_point(
+            filled=True, size=90, stroke="white", strokeWidth=0.7
+        ).encode(
+            x=fiscal_year_axis,
+            y=rank_axis,
+            color=state_color,
+            tooltip=trend_tooltip,
+        )
+        selected_labels = alt.Chart(endpoint_labels).mark_text(
+            align="left", dx=7, fontSize=11
+        ).encode(
+            x=fiscal_year_axis,
+            y=rank_axis,
+            color=state_color,
+            text="state:N",
+        )
+        trend_chart = (
+            alt.layer(
+                background_lines,
+                selected_lines,
+                selected_points,
+                selected_labels,
+            )
+            .properties(
+                width=820,
+                height=560,
+                title=alt.TitleParams(
+                    text="Track selected states across Census fiscal years",
+                    subtitle=[
+                        "Gray lines show all calculated states; choose states by name to highlight their ranks.",
+                        f"Labels mark the last available year (FY{last_year}); rank 1 is at the top.",
+                    ],
+                    anchor="start",
+                ),
+            )
+            .resolve_scale(x="shared", y="shared", color="shared")
+        )
+        chart_output = mo.vstack(
+            [
+                mo.md(
+                    "## State rank trends\\n"
+                    "The chart avoids mouse-based state picking: every state is a "
+                    "thin gray reference line, and the multiselect highlights chosen "
+                    "states with larger points, tooltips, and labels at the last "
+                    "available year. The initial view shows the three lowest and "
+                    "three highest mean-rank states; choose a few states for clearer "
+                    "labels. All series here are independent Census + BEA calculations."
+                ),
+                trend_chart,
+            ]
+        )
+    chart_output
     return
 
 
