@@ -1318,8 +1318,8 @@ def _(mo):
     then property. Every segment is state-and-local revenue divided by that
     state's BEA personal income, multiplied by 100; it is **not** a share of
     total tax revenue. A muted `#rank` at the end of each bar gives its overall
-    rank; hover over a segment for its individual tax-type rank. The `▶`
-    marker flags Washington's y-axis label without changing the rank order.
+    rank; hover over a segment for its individual tax-type rank. A `▶` marker
+    precedes bold Washington text on the vertical labels; rank order is unchanged.
     """)
     return
 
@@ -1377,12 +1377,15 @@ def _(alt):
         )
 
         x_scale = alt.Scale(domain=[0, data["total"].max() * 1.16], nice=False)
-        state_sort = alt.SortField(field="total", order="descending")
-        state_axis = alt.Axis(
-            labelExpr=(
-                "datum.value === 'Washington' ? '▶ Washington' : datum.value"
-            )
+        state_order = (
+            data[["state", "total"]]
+            .drop_duplicates("state")
+            .sort_values(
+                ["total", "state"], ascending=[False, True], ignore_index=True
+            )["state"]
+            .tolist()
         )
+        hidden_state_axis = alt.Axis(labels=False, ticks=False, domain=False)
         bars = alt.Chart(data).mark_bar().encode(
             x=alt.X(
                 "burden_pct:Q",
@@ -1390,7 +1393,9 @@ def _(alt):
                 scale=x_scale,
                 title="Tax revenue as % of state personal income",
             ),
-            y=alt.Y("state:N", sort=state_sort, title=None, axis=state_axis),
+            y=alt.Y(
+                "state:N", sort=state_order, title=None, axis=hidden_state_axis
+            ),
             color=alt.Color(
                 "tax_type:N",
                 sort=tax_type_order,
@@ -1428,16 +1433,55 @@ def _(alt):
             align="left", baseline="middle", dx=5, fontSize=9, color="#666666"
         ).encode(
             x=alt.X("total:Q", scale=x_scale, axis=None),
-            y=alt.Y("state:N", sort=state_sort, axis=state_axis),
+            y=alt.Y("state:N", sort=state_order, axis=hidden_state_axis),
             text="overall_rank_label:N",
         )
 
-        return (
+        state_labels = data[["state"]].drop_duplicates("state").copy()
+        washington_label_data = state_labels.loc[
+            state_labels["state"].eq("Washington")
+        ]
+        state_label_text = alt.Chart(
+            state_labels.loc[state_labels["state"].ne("Washington")]
+        ).mark_text(
+            align="right", baseline="middle", fontSize=11
+        ).encode(
+            x=alt.value(150),
+            y=alt.Y("state:N", sort=state_order, axis=None),
+            text=alt.Text("state:N"),
+        )
+        washington_name = alt.Chart(washington_label_data).mark_text(
+            align="right",
+            baseline="middle",
+            fontSize=11,
+            fontWeight="bold",
+        ).encode(
+            x=alt.value(150),
+            y=alt.Y("state:N", sort=state_order, axis=None),
+            text=alt.Text("state:N"),
+        )
+        washington_arrow = alt.Chart(washington_label_data).mark_text(
+            align="right", baseline="middle", fontSize=11
+        ).encode(
+            x=alt.value(60),
+            y=alt.Y("state:N", sort=state_order, axis=None),
+            text=alt.value("▶"),
+        )
+        state_label_chart = (
+            alt.layer(state_label_text, washington_name, washington_arrow)
+            .resolve_scale(y="shared")
+            .properties(width=160, height=760)
+        )
+        bar_chart = (
             alt.layer(bars, labels)
             .resolve_scale(x="shared", y="shared")
+            .properties(width=760, height=760)
+        )
+
+        return (
+            alt.hconcat(state_label_chart, bar_chart, spacing=4)
+            .resolve_scale(y="shared")
             .properties(
-                width=760,
-                height=760,
                 title=alt.TitleParams(
                     text=title,
                     subtitle=[
