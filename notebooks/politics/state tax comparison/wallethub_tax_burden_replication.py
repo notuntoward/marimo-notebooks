@@ -44,6 +44,50 @@ def _(mo):
     describe the matching categories: property tax, individual income tax (not corporate
     income tax), and total sales/gross receipts (general plus selective sales).
 
+    For FY2023–FY2024, the Census API has nested labels (for example, sale-of-property
+    revenue is not property-tax revenue), so the loader selects Census aggregate codes:
+    property LF0009, individual income LF0023, general sales LF0011, and total selective
+    sales LF0012. The API omits some state/category rows when no receipts are reported;
+    those combinations are represented as $0. Duplicate rows or blank amounts still
+    raise errors rather than being silently counted or filled.
+
+    ### Equation implemented
+
+    For state $s$ and year $y$, let $C_{s,y,a}$ be the Census tax amount and
+    $P_{s,y}$ be BEA personal income:
+
+    - $C_{s,y,a}$ is Census `govslocalfin.AMOUNT`, filtered by `NAME = s`,
+      `GOVTYPE_LABEL` = combined state and local, `AGG_DESC = a` (checked against
+      `AGG_DESC_LABEL`), and API predicate `time = y`. For FY2021–FY2022 it is
+      the `Property`, `Individual Income`, `General Sales`, or `Selective Sales`
+      row and state column in Census Table 1.
+    - $P_{s,y}$ is BEA Regional `SAINC1`, row `GeoName = s` and `LineCode = 1`
+      (“Personal income”), using the column named for year $y$.
+    - Census `AMOUNT` is in thousands of dollars; BEA `SAINC1` values are in
+      millions of dollars.
+      Census $y$ is a fiscal year; BEA column $y$ is a calendar year.
+
+    The implemented component percentages are:
+
+    $$
+    \begin{aligned}
+    B_{s,y,\mathrm{property}}(\%) &=
+      0.1 \frac{C_{s,y,\mathrm{LF0009}}}{P_{s,y}} \\
+    B_{s,y,\mathrm{individual\ income}}(\%) &=
+      0.1 \frac{C_{s,y,\mathrm{LF0023}}}{P_{s,y}} \\
+    B_{s,y,\mathrm{sales/excise}}(\%) &=
+      0.1 \frac{C_{s,y,\mathrm{LF0011}} + C_{s,y,\mathrm{LF0012}}}{P_{s,y}} \\
+    B_{s,y,\mathrm{total}}(\%) &=
+      B_{s,y,\mathrm{property}} +
+      B_{s,y,\mathrm{individual\ income}} +
+      B_{s,y,\mathrm{sales/excise}}
+    \end{aligned}
+    $$
+
+    The factor $0.1$ is the unit conversion and percentage multiplier:
+    $100 \times 1{,}000 / 1{,}000{,}000$. Each rank is computed in descending
+    order with ties assigned the minimum rank, so rank 1 is the highest burden.
+
     ### Source fit and limits
 
     WalletHub cites the [Tax Policy Center (TPC)](https://state-local-finance-data.taxpolicycenter.org/),
@@ -407,13 +451,29 @@ def _(CACHE, HEADERS, STATES, fetch_first, json, os, pd, requests):
             }
             try:
                 response = requests.get(
-                    CENSUS_API_URL, params=params, headers=HEADERS, timeout=60
+                    CENSUS_API_URL,
+                    params=params,
+                    headers=HEADERS,
+                    timeout=60,
+                    allow_redirects=False,
                 )
             except requests.RequestException as exc:
                 raise RuntimeError(
                     f"Census API request failed ({type(exc).__name__}); "
                     "check your connection and Census API key."
                 ) from None
+            if 300 <= response.status_code < 400:
+                location = response.headers.get("Location", "")
+                if "invalid_key" in location.casefold():
+                    raise RuntimeError(
+                        "Census rejected the API key and redirected to its "
+                        "invalid-key page. Check that CENSUS_API_KEY is copied "
+                        "correctly and active, then restart marimo so its kernel "
+                        "inherits the updated environment."
+                    )
+                raise RuntimeError(
+                    f"Census API redirected the request (HTTP {response.status_code})."
+                )
             if response.status_code != 200:
                 raise RuntimeError(
                     f"Census API returned HTTP {response.status_code}: "
@@ -422,7 +482,12 @@ def _(CACHE, HEADERS, STATES, fetch_first, json, os, pd, requests):
             try:
                 payload = response.json()
             except ValueError:
-                raise RuntimeError("Census API returned non-JSON data.") from None
+                content_type = response.headers.get("Content-Type", "unknown")
+                raise RuntimeError(
+                    "Census API returned non-JSON data "
+                    f"(Content-Type: {content_type}); check the API key or "
+                    "whether Census returned an error page."
+                ) from None
             if isinstance(payload, dict) and "error" in payload:
                 raise RuntimeError(f"Census API error: {payload['error']}")
             cache_path.write_text(
@@ -433,7 +498,7 @@ def _(CACHE, HEADERS, STATES, fetch_first, json, os, pd, requests):
         if not payload or isinstance(payload[0], dict):
             raise RuntimeError(f"Census API returned an invalid FY{fy} response.")
         frame = pd.DataFrame(payload[1:], columns=payload[0])
-        required = {"NAME", "AGG_DESC_LABEL", "GOVTYPE_LABEL", "AMOUNT"}
+        required = {"NAME", "AGG_DESC", "AGG_DESC_LABEL", "GOVTYPE_LABEL", "AMOUNT"}
         if not required.issubset(frame.columns):
             raise RuntimeError(
                 f"Census FY{fy} response is missing columns: "
@@ -444,25 +509,43 @@ def _(CACHE, HEADERS, STATES, fetch_first, json, os, pd, requests):
             r"state\s*(?:and|&)\s*local", case=False, regex=True, na=False
         )
         frame = frame[local_level & frame["NAME"].isin(STATES)].copy()
-        labels = frame["AGG_DESC_LABEL"].astype(str).str.casefold()
         categories = {
-            "property": labels.str.contains(r"\bproperty\b", regex=True),
-            "income": labels.str.contains(r"\bindividual income\b", regex=True),
-            "general_sales": labels.str.contains(r"\bgeneral sales\b", regex=True),
-            "selective_sales": labels.str.contains(r"\bselective sales\b", regex=True),
+            "property": ("LF0009", "taxes - property"),
+            "income": ("LF0023", "income taxes - individual"),
+            "general_sales": ("LF0011", "taxes - general sales"),
+            "selective_sales": ("LF0012", "total selective sales"),
         }
 
         rows = {}
-        for category, mask in categories.items():
-            selected = frame.loc[mask, ["NAME", "AMOUNT"]].copy()
-            if len(selected) != len(STATES):
-                matches = frame.loc[mask, "AGG_DESC_LABEL"].drop_duplicates().tolist()
+        for category, (aggregate_code, expected_label) in categories.items():
+            selected = frame.loc[
+                frame["AGG_DESC"].eq(aggregate_code),
+                ["NAME", "AMOUNT", "AGG_DESC_LABEL"],
+            ].copy()
+            labels = selected["AGG_DESC_LABEL"].astype(str).str.casefold()
+            if selected.empty or not labels.str.endswith(expected_label).all():
                 raise RuntimeError(
-                    f"FY{fy}: expected one Census '{category}' row per state "
-                    f"({len(STATES)}); found {len(selected)}. Matching labels: {matches}"
+                    f"FY{fy}: Census aggregate {aggregate_code} did not match "
+                    f"the expected '{category}' category. Labels: "
+                    f"{selected['AGG_DESC_LABEL'].drop_duplicates().tolist()}"
                 )
-            values = pd.to_numeric(selected["AMOUNT"], errors="coerce") * 1_000.0
-            rows[category] = pd.Series(values.to_numpy(), index=selected["NAME"])
+            if selected["NAME"].duplicated().any():
+                duplicates = selected.loc[
+                    selected["NAME"].duplicated(keep=False), "NAME"
+                ].drop_duplicates().tolist()
+                raise RuntimeError(
+                    f"FY{fy}: Census aggregate {aggregate_code} has duplicate "
+                    f"rows for states: {duplicates}"
+                )
+            values = pd.to_numeric(selected["AMOUNT"], errors="coerce")
+            if values.isna().any():
+                raise RuntimeError(
+                    f"FY{fy}: Census aggregate {aggregate_code} has blank amounts."
+                )
+            rows[category] = pd.Series(
+                values.to_numpy() * 1_000.0,
+                index=selected["NAME"],
+            ).reindex(STATES, fill_value=0.0)
 
         taxes = pd.DataFrame(rows).reindex(STATES)
         taxes["sales_excise"] = taxes["general_sales"] + taxes["selective_sales"]

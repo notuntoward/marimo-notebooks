@@ -53,7 +53,12 @@ predates FY2024 data, released in July 2026.
 - **Categories:** Census property tax; individual income tax (excluding corporate
   income tax); and general sales plus selective sales taxes. This follows the
   [Tax Policy Center's series definitions](https://state-local-finance-data.taxpolicycenter.org/help/revenue.html),
-  which correspond to WalletHub's described components.
+  which correspond to WalletHub's described components. For FY2023–FY2024 the notebook
+  selects Census aggregate codes LF0009 (property), LF0023 (individual income), LF0011
+  (general sales), and LF0012 (total selective sales), avoiding ambiguous substring
+  matches such as “Sale of Property.” The API omits some state/category rows with no
+  reported receipts; those absent combinations are represented as $0. Duplicate rows
+  and blank amounts are still treated as errors.
 - **WalletHub article values:** the complete 50-state rankings are downloaded from the
   archived article reproductions for [2024](https://www.cpapracticeadvisor.com/2024/12/01/how-the-50-states-rank-by-tax-burden/103495/),
   [2025](https://www.cpapracticeadvisor.com/2025/04/01/how-the-50-states-rank-by-tax-burden-updated-for-2025/158094/),
@@ -65,6 +70,44 @@ category by state personal income, then sums the three shares for the overall bu
 The raw Census and BEA values are downloaded and used in the calculations. The article
 values are downloaded separately so their complete published rankings can be compared
 against the independent calculations.
+
+### Implemented equation and column legend
+
+For state $s$ and year $y$, let $C_{s,y,a}$ be the Census tax amount and
+$P_{s,y}$ be BEA personal income:
+
+- $C_{s,y,a}$ is Census `govslocalfin.AMOUNT`, filtered by `NAME = s`,
+  `GOVTYPE_LABEL` = combined state and local, `AGG_DESC = a` (checked against
+  `AGG_DESC_LABEL`), and API predicate `time = y`. For FY2021–FY2022, it is the
+  `Property`, `Individual Income`, `General Sales`, or `Selective Sales` row and
+  state column in Census Table 1.
+- $P_{s,y}$ is BEA Regional `SAINC1`, row `GeoName = s` and `LineCode = 1`
+  (“Personal income”), using the column named for year $y$.
+- Census `AMOUNT` is in thousands of dollars; BEA `SAINC1` values are in
+  millions of dollars. Census $y$ is a fiscal year; BEA column $y$ is a
+  calendar year.
+
+The component percentages implemented by the notebook are:
+
+$$
+\begin{aligned}
+B_{s,y,\mathrm{property}}(\%) &=
+  0.1 \frac{C_{s,y,\mathrm{LF0009}}}{P_{s,y}} \\
+B_{s,y,\mathrm{individual\ income}}(\%) &=
+  0.1 \frac{C_{s,y,\mathrm{LF0023}}}{P_{s,y}} \\
+B_{s,y,\mathrm{sales/excise}}(\%) &=
+  0.1 \frac{C_{s,y,\mathrm{LF0011}} + C_{s,y,\mathrm{LF0012}}}{P_{s,y}} \\
+B_{s,y,\mathrm{total}}(\%) &=
+  B_{s,y,\mathrm{property}} +
+  B_{s,y,\mathrm{individual\ income}} +
+  B_{s,y,\mathrm{sales/excise}}
+\end{aligned}
+$$
+
+The factor $0.1$ equals $100 \times 1{,}000 / 1{,}000{,}000$: it converts the
+Census and BEA units to the same dollar basis and expresses the ratio as a
+percentage. Component and total ranks are computed in descending order with
+ties assigned the minimum rank, so rank 1 is the highest burden.
 
 ## Full state tables
 
