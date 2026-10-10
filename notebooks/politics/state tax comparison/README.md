@@ -65,19 +65,53 @@ predates FY2024 data, released in July 2026.
   and [2026](https://www.cpapracticeadvisor.com/2026/03/31/2026-update-how-the-50-states-rank-by-tax-burden/180445/).
   They are comparison values only; they are never inputs to the Census/BEA calculation.
 
-For each state, the calculation divides each combined state-and-local tax-revenue
-category by state personal income, then sums the three shares for the overall burden.
-The raw Census and BEA values are downloaded and used in the calculations. The article
-values are downloaded separately so their complete published rankings can be compared
-against the independent calculations.
+For each state, the calculation divides each of four combined state-and-local
+tax-type revenues by state personal income, then sums the four shares. General-sales
+and selective-sales shares are also added together to reproduce WalletHub's single
+sales/excise category. The raw Census and BEA values are downloaded and used in the
+calculations. The article values are downloaded separately so their complete
+published rankings can be compared against the independent calculations.
+
+### Official definitions
+
+The Census Bureau defines taxes for its government-finance statistics as compulsory
+contributions exacted by a government for public purposes, excluding special
+assessments for capital improvements and contributions to retirement or social
+insurance systems. The tax-type definitions below are concise summaries of Census
+categories; the linked manual is the official source. `T` codes are Census tax
+classification codes; the `LF` codes in the source table are separate Census API
+aggregate IDs ([API variable definitions](https://api.census.gov/data/timeseries/govslocalfin/variables/AGG_DESC_LABEL.html)).
+
+- **Property tax (T01):** tax on ownership of property, measured by its value. Census
+  includes both real and personal property. [Census Tax Revenue Classification
+  Manual, p. 4-9](https://www2.census.gov/programs-surveys/stc/technical-documentation/questionnaires/Tax-Revenue-Classification-Manual.pdf#page=1).
+- **Individual income tax (T40):** tax on individuals measured by net income, plus
+  taxes on certain types of individual income such as interest and dividends. This
+  is distinct from corporate net-income tax. [Census Tax Revenue Classification
+  Manual, p. 4-15](https://www2.census.gov/programs-surveys/stc/technical-documentation/questionnaires/Tax-Revenue-Classification-Manual.pdf#page=7).
+- **General sales tax (T09):** tax applying broadly, subject to specified exceptions,
+  to sales of goods and services or gross receipts; it includes sales/use taxes.
+  [Census Tax Revenue Classification Manual, p. 4-10](https://www2.census.gov/programs-surveys/stc/technical-documentation/questionnaires/Tax-Revenue-Classification-Manual.pdf#page=2).
+- **Selective sales tax (T10–T19):** tax on particular goods or services, or on the
+  gross receipts of particular businesses, imposed separately from a general sales
+  tax. Census's selective-sales total is the tax type plotted separately from general
+  sales in the chart, but is combined with it for WalletHub's sales/excise result.
+  [Census Tax Revenue Classification Manual, p. 4-11](https://www2.census.gov/programs-surveys/stc/technical-documentation/questionnaires/Tax-Revenue-Classification-Manual.pdf#page=3).
+- **State personal income:** income received by, or on behalf of, people who live in
+  the state. BEA calculates it as wage and salary disbursements and supplements,
+  proprietors' and rental income, dividends, interest, and current transfer receipts,
+  less contributions for government social insurance. It is assigned by recipient
+  residence and reported in current dollars (not inflation-adjusted); it is not
+  taxable income or a per-capita amount. [BEA glossary: State personal
+  income](https://www.bea.gov/help/glossary/state-personal-income).
 
 ### Equation and source mapping
 
 Each tax-type percentage is that tax revenue divided by the state's personal
 income, multiplied by 100. In other words, the denominator is not total tax
-revenue. The chart at the end stacks three percentages: property tax,
-individual income tax, and sales/excise tax. Sales/excise combines general-sales
-and selective-sales revenue:
+revenue. WalletHub reports three categories: property tax, individual income
+tax, and sales/excise tax. The chart at the end displays four Census tax types,
+splitting sales/excise into general-sales and selective-sales revenue:
 
 ```text
 sales_excise_pct[state, year] =
@@ -120,9 +154,9 @@ For FY2024 specifically, Census API `time=2024` supplies the numerator and BEA
 `SAINC1` column `2024` supplies the denominator. Since Census amounts are
 thousands and BEA values are millions, the tax-type equation in raw units is
 `tax_type_pct = 0.1 * Census_AMOUNT_thousands / BEA_SAINC1_millions`;
-for sales/excise, add the general-sales and selective-sales amounts first. The
-stacked bar chart shows these three resulting tax-type percentages for each
-state; the total bar length is their sum.
+for WalletHub's sales/excise category, add the general-sales and selective-sales
+amounts first. The chart displays these two percentages separately; with
+property and individual income, all four tax-type shares sum to the total burden.
 Census FY2024 is a government fiscal year, while BEA column 2024 is a calendar
 year. This is different from the **WalletHub 2024 article edition**, which the
 notebook maps to Census FY2021. Tax-type and total ranks use descending values

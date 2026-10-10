@@ -55,9 +55,10 @@ def _(mo):
 
     Each tax-type percentage is that tax revenue divided by the state's personal
     income, multiplied by 100. In other words, the denominator is not total tax
-    revenue. The chart at the end stacks three percentages: property tax,
-    individual income tax, and sales/excise tax. Sales/excise combines general-sales
-    and selective-sales revenue:
+    revenue. WalletHub reports three categories: property tax, individual income
+    tax, and sales/excise tax. The final chart separates the latter into its two
+    underlying Census tax types (general sales and selective sales), so it displays
+    all four tax types individually:
 
     ```text
     sales_excise_pct[state, year] =
@@ -99,10 +100,10 @@ def _(mo):
     For FY2024 specifically, Census API `time=2024` supplies the numerator and
     BEA `SAINC1` column `2024` supplies the denominator. Since Census amounts are
     thousands and BEA values are millions, the tax-type equation in raw units is
-    `tax_type_pct = 0.1 * Census_AMOUNT_thousands / BEA_SAINC1_millions`;
-    for sales/excise, add the general-sales and selective-sales amounts first. The
-    stacked bar chart shows these three resulting tax-type percentages for each
-    state; the total bar length is their sum.
+    `tax_type_pct = 0.1 * Census_AMOUNT_thousands / BEA_SAINC1_millions`.
+    For the WalletHub sales/excise category, add the general-sales and selective-sales
+    amounts. The chart instead plots each of those two sales tax types separately;
+    its four stacked tax-type shares sum to the same total burden.
     Census FY2024 is a government fiscal year, while BEA column 2024 is a
     calendar year. This is different from the **WalletHub 2024 article edition**,
     which the notebook maps to Census FY2021. Tax-type and total ranks use
@@ -646,9 +647,13 @@ def _(load_census_taxes, pd):
         out = pd.DataFrame({
             "property": taxes["property"] / denom * 100,
             "income": taxes["income"] / denom * 100,
-            "sales_excise": taxes["sales_excise"] / denom * 100,
+            "general_sales": taxes["general_sales"] / denom * 100,
+            "selective_sales": taxes["selective_sales"] / denom * 100,
         })
-        out["total"] = out[["property", "income", "sales_excise"]].sum(axis=1)
+        out["sales_excise"] = out["general_sales"] + out["selective_sales"]
+        out["total"] = out[
+            ["property", "income", "general_sales", "selective_sales"]
+        ].sum(axis=1)
         for c in ["total", "property", "income", "sales_excise"]:
             out[f"rank_{c}"] = out[c].rank(ascending=False, method="min").astype(int)
         out["property_tax_revenue_usd"] = taxes["property"]
@@ -994,26 +999,34 @@ def _(LATEST_FY, mo, results):
     import matplotlib.pyplot as plt
     mo.stop(LATEST_FY not in results)
     t = results[LATEST_FY].sort_values("total")
-    fig, ax = plt.subplots(figsize=(7, 10))
+    fig, ax = plt.subplots(figsize=(8, 10))
     ax.barh(t.index, t["property"], label="Property tax")
     ax.barh(t.index, t["income"], left=t["property"], label="Individual income tax")
     ax.barh(
         t.index,
-        t["sales_excise"],
+        t["general_sales"],
         left=t["property"] + t["income"],
-        label="Sales & excise taxes",
+        label="General sales tax",
+    )
+    ax.barh(
+        t.index,
+        t["selective_sales"],
+        left=t["property"] + t["income"] + t["general_sales"],
+        label="Selective sales tax",
     )
     ax.set_xlabel("Tax revenue as % of state personal income")
     ax.set_title(f"State and local tax revenue by type — Census FY{LATEST_FY}")
-    ax.legend(); fig.tight_layout()
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
     mo.vstack([
         mo.md(
             "## Latest-year tax mix by state\n"
-            "Each bar segment is the corresponding state-and-local tax revenue "
-            "divided by that state's BEA personal income, multiplied by 100. "
-            "It is **not** a share of total tax revenue. Sales & excise combines "
-            "Census general-sales and selective-sales revenue; the full bar is "
-            "the sum of property, individual-income, and sales/excise percentages."
+            "Each segment is one Census tax type: property, individual income, "
+            "general sales, or selective sales. Each is state-and-local revenue "
+            "divided by that state's BEA personal income, multiplied by 100; it "
+            "is **not** a share of total tax revenue. WalletHub combines general "
+            "and selective sales as its sales/excise category; this chart splits "
+            "them out. The four segments sum to total burden."
         ),
         fig,
     ])
