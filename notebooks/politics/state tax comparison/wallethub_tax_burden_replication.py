@@ -18,7 +18,19 @@ def _():
     import pandas as pd
     import requests
 
-    return HTMLParser, alt, io, json, mo, os, pathlib, pd, re, requests, zipfile
+    return (
+        HTMLParser,
+        alt,
+        io,
+        json,
+        mo,
+        os,
+        pathlib,
+        pd,
+        re,
+        requests,
+        zipfile,
+    )
 
 
 @app.cell
@@ -230,7 +242,15 @@ def _(pathlib):
         "New Mexico","New York","North Carolina","North Dakota","Ohio","Oklahoma","Oregon",
         "Pennsylvania","Rhode Island","South Carolina","South Dakota","Tennessee","Texas",
         "Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"]
-    return ARTICLE_URLS, CACHE, EDITIONS, HEADERS, LATEST_FY, REQUESTED_FY, STATES
+    return (
+        ARTICLE_URLS,
+        CACHE,
+        EDITIONS,
+        HEADERS,
+        LATEST_FY,
+        REQUESTED_FY,
+        STATES,
+    )
 
 
 @app.cell
@@ -683,15 +703,24 @@ def _(load_census_taxes, pd):
 
 
 @app.cell
-def _(BEA_URL, load_personal_income, mo):
+def _(load_personal_income, mo):
     with mo.status.spinner("Downloading BEA personal income..."):
         PI = load_personal_income()
     mo.md(f"BEA personal income loaded: {PI.shape[0]} states, years {PI.columns.min()}–{PI.columns.max()}")
-    return BEA_URL, PI
+    return (PI,)
 
 
 @app.cell
-def _(EDITIONS, LATEST_FY, PI, REQUESTED_FY, article_rankings, mo, pd, safe_burden):
+def _(
+    EDITIONS,
+    LATEST_FY,
+    PI,
+    REQUESTED_FY,
+    article_rankings,
+    mo,
+    pd,
+    safe_burden,
+):
     def _():
         results, result_urls, errors, unavailable, rows = {}, {}, {}, {}, []
         all_fy = sorted(set(EDITIONS.values()) | {LATEST_FY, REQUESTED_FY})
@@ -742,11 +771,11 @@ def _(EDITIONS, LATEST_FY, PI, REQUESTED_FY, article_rankings, mo, pd, safe_burd
 
 
     results, result_urls, errors, unavailable, match = _()
-    return errors, match, results, result_urls, unavailable
+    return errors, match, result_urls, results, unavailable
 
 
 @app.cell
-def _(article_errors, errors, match, mo, unavailable):
+def _(STATES, article_errors, errors, match, mo, unavailable):
     err_md = "\n".join(f"- FY{k}: `{v[:300]}`" for k, v in errors.items()) or "None"
     article_err_md = "\n".join(
         f"- {edition}: `{message[:300]}`"
@@ -755,6 +784,26 @@ def _(article_errors, errors, match, mo, unavailable):
     unavailable_md = "\n".join(
         f"- FY{k}: {v}" for k, v in unavailable.items()
     ) or "None"
+    states_of_interest = mo.ui.multiselect(
+        options=STATES,
+        value=["Washington"] if "Washington" in STATES else [],
+        label="States of interest (bold in tables; emphasized in charts)",
+    )
+
+    def state_interest_row_style(data, state_column, interested_states):
+        interested = set(interested_states)
+        state_by_row_id = {
+            str(row_id): state
+            for row_id, state in enumerate(data[state_column].tolist())
+        }
+
+        def style_cell(row_id, _column_name, _value):
+            if state_by_row_id.get(str(row_id)) in interested:
+                return {"fontWeight": "bold"}
+            return {}
+
+        return style_cell
+
     mo.vstack([
         mo.md(
             "## Article-year check\n"
@@ -768,11 +817,21 @@ def _(article_errors, errors, match, mo, unavailable):
         mo.md(f"**Requested Census year not yet published:**\n\n{unavailable_md}"),
         mo.md(f"**Download / parse errors:**\n\n{err_md}"),
     ])
-    return
+    return state_interest_row_style, states_of_interest
 
 
 @app.cell
-def _(BEA_URL, EDITIONS, article_rankings, mo, pd, result_urls, results):
+def _(
+    BEA_URL,
+    EDITIONS,
+    article_rankings,
+    mo,
+    pd,
+    result_urls,
+    results,
+    state_interest_row_style,
+    states_of_interest,
+):
     comparison_columns = [
         "period",
         "census_fy",
@@ -990,7 +1049,14 @@ def _(BEA_URL, EDITIONS, article_rankings, mo, pd, result_urls, results):
             "`comparison_data` is the long-form MultiIndex DataFrame; use "
             "`comparison_data.reset_index().to_csv(...)` for the full comparison export."
         ),
-        mo.ui.table(comparison_view, selection=None, page_size=200),
+        mo.ui.table(
+            comparison_view,
+            selection=None,
+            page_size=200,
+            style_cell=state_interest_row_style(
+                comparison_view, "state", states_of_interest.value
+            ),
+        ),
         mo.md(
             "## Raw downloaded inputs\n"
             "Census revenue amounts and BEA personal income are shown in dollars with "
@@ -998,13 +1064,28 @@ def _(BEA_URL, EDITIONS, article_rankings, mo, pd, result_urls, results):
             "The `downloaded_inputs` MultiIndex is `(period, census_fy, state)`; source "
             "URLs remain available in the DataFrame."
         ),
-        mo.ui.table(input_view, selection=None, page_size=200),
+        mo.ui.table(
+            input_view,
+            selection=None,
+            page_size=200,
+            style_cell=state_interest_row_style(
+                input_view, "state", states_of_interest.value
+            ),
+        ),
     ])
-    return comparison_data, downloaded_inputs
+    return
 
 
 @app.cell
-def _(LATEST_FY, errors, mo, pd, results):
+def _(
+    LATEST_FY,
+    errors,
+    mo,
+    pd,
+    results,
+    state_interest_row_style,
+    states_of_interest,
+):
     calculated_columns = {
         "rank_total": "overall_rank",
         "total": "total_burden_pct",
@@ -1064,7 +1145,14 @@ def _(LATEST_FY, errors, mo, pd, results):
         yearly_table = yearly_table.reset_index().rename(
             columns={"state": "State"}
         )
-        yearly_output = mo.ui.table(yearly_table, selection=None, page_size=50)
+        yearly_output = mo.ui.table(
+            yearly_table,
+            selection=None,
+            page_size=50,
+            style_cell=state_interest_row_style(
+                yearly_table, "State", states_of_interest.value
+            ),
+        )
     else:
         burden_data = pd.DataFrame(
             columns=["census_fy", "state", *calculated_columns.values()]
@@ -1126,7 +1214,14 @@ def _(LATEST_FY, errors, mo, pd, results):
         latest_table["BEA personal income ($)"] = latest_table[
             "BEA personal income ($)"
         ].map(lambda value: f"${value:,.0f}")
-        latest_output = mo.ui.table(latest_table, selection=None, page_size=50)
+        latest_output = mo.ui.table(
+            latest_table,
+            selection=None,
+            page_size=50,
+            style_cell=state_interest_row_style(
+                latest_table, "State", states_of_interest.value
+            ),
+        )
 
     if LATEST_FY in results:
         latest_status = mo.md(
@@ -1184,20 +1279,29 @@ def _(burden_data, mo):
     return (state_picker,)
 
 
-@app.cell
-def _(alt, burden_data, mo, state_picker):
+@app.cell(expand_output=True)
+def _(alt, burden_data, mo, state_picker, states_of_interest):
     if burden_data.empty:
         chart_output = mo.md(
             "The state trend chart is unavailable because no Census + BEA "
             "state-year calculations succeeded."
         )
     else:
+        _interest_states = set(states_of_interest.value)
+        _highlighted_states = set(state_picker.value) | _interest_states
         highlighted = burden_data.loc[
-            burden_data["state"].isin(state_picker.value)
+            burden_data["state"].isin(_highlighted_states)
+        ].copy()
+        _interest_highlighted = burden_data.loc[
+            burden_data["state"].isin(_interest_states)
         ].copy()
         last_year = burden_data["census_fy"].max()
         endpoint_labels = highlighted.loc[
             highlighted["census_fy"].eq(last_year)
+            & ~highlighted["state"].isin(_interest_states)
+        ]
+        interest_endpoint_labels = _interest_highlighted.loc[
+            _interest_highlighted["census_fy"].eq(last_year)
         ]
 
         trend_year_values = sorted(burden_data["census_fy"].unique())
@@ -1259,8 +1363,32 @@ def _(alt, burden_data, mo, state_picker):
             color=state_color,
             tooltip=trend_tooltip,
         )
+        interest_lines = alt.Chart(_interest_highlighted).mark_line(
+            strokeWidth=4
+        ).encode(
+            x=fiscal_year_axis,
+            y=rank_axis,
+            detail="state:N",
+            color=state_color,
+        )
+        interest_points = alt.Chart(_interest_highlighted).mark_point(
+            filled=True, size=180, stroke="white", strokeWidth=1.4
+        ).encode(
+            x=fiscal_year_axis,
+            y=rank_axis,
+            color=state_color,
+            tooltip=trend_tooltip,
+        )
         selected_labels = alt.Chart(endpoint_labels).mark_text(
             align="left", dx=7, fontSize=10
+        ).encode(
+            x=fiscal_year_axis,
+            y=rank_axis,
+            color=state_color,
+            text="state:N",
+        )
+        interest_labels = alt.Chart(interest_endpoint_labels).mark_text(
+            align="left", dx=9, fontSize=13, fontWeight="bold"
         ).encode(
             x=fiscal_year_axis,
             y=rank_axis,
@@ -1272,7 +1400,10 @@ def _(alt, burden_data, mo, state_picker):
                 background_lines,
                 selected_lines,
                 selected_points,
+                interest_lines,
+                interest_points,
                 selected_labels,
+                interest_labels,
             )
             .properties(
                 width=640,
@@ -1280,8 +1411,9 @@ def _(alt, burden_data, mo, state_picker):
                 title=alt.TitleParams(
                     text="Track selected states across Census fiscal years",
                     subtitle=[
-                        "Gray lines show all calculated states; choose states by name to highlight their ranks.",
-                        f"Labels mark the last available year (FY{last_year}); rank 1 is at the top.",
+                        "Gray lines show every calculated state; selected states are drawn in color.",
+                        f"States of interest have thicker lines, larger points, and bold labels at FY{last_year}.",
+                        "Rank 1 is at the top.",
                     ],
                     anchor="start",
                 ),
@@ -1292,16 +1424,26 @@ def _(alt, burden_data, mo, state_picker):
             [
                 mo.md(
                     "## State rank trends\\n"
-                    "The chart avoids mouse-based state picking: every state is a "
-                    "thin gray reference line, and the multiselect highlights chosen "
-                    "states with larger points, tooltips, and labels at the last "
-                    "available year. The initial view shows the three lowest and "
-                    "three highest mean-rank states; choose a few states for clearer "
-                    "labels. All series here are independent Census + BEA calculations."
+                    "Gray lines show every calculated state. The trend-state picker "
+                    "keeps the initial three lowest and three highest mean-rank states; "
+                    "states of interest are added automatically. Those states use "
+                    "thicker lines, larger points, and bold labels. All series are "
+                    "independent Census + BEA calculations."
                 ),
                 trend_chart,
             ]
         )
+    chart_output = mo.vstack(
+        [
+            mo.md(
+                "## States of interest\n"
+                "Choose one or more states below. This updates the trend, both bar charts, "
+                "and bold table rows."
+            ),
+            states_of_interest,
+            chart_output,
+        ]
+    )
     chart_output
     return
 
@@ -1319,7 +1461,7 @@ def _(mo):
     state's BEA personal income, multiplied by 100; it is **not** a share of
     total tax revenue. A muted `#rank` at the end of each bar gives its overall
     rank; hover over a segment for its individual tax-type rank. A `▶` marker
-    precedes bold Washington text on the vertical labels; rank order is unchanged.
+    precedes bold state-of-interest labels on the vertical labels; rank order is unchanged.
     """)
     return
 
@@ -1368,7 +1510,8 @@ def _(LATEST_FY, mo, pd, results):
 
 @app.cell
 def _(alt):
-    def tax_mix_chart(data, title):
+    def tax_mix_chart(data, title, states_of_interest):
+        _interest_states = set(states_of_interest)
         tax_type_order = (
             data[["tax_type", "tax_type_order"]]
             .drop_duplicates()
@@ -1438,19 +1581,20 @@ def _(alt):
         )
 
         state_labels = data[["state"]].drop_duplicates("state").copy()
-        washington_label_data = state_labels.loc[
-            state_labels["state"].eq("Washington")
+        interest_state_labels = state_labels.loc[
+            state_labels["state"].isin(_interest_states)
         ]
-        state_label_text = alt.Chart(
-            state_labels.loc[state_labels["state"].ne("Washington")]
-        ).mark_text(
+        other_state_labels = state_labels.loc[
+            ~state_labels["state"].isin(_interest_states)
+        ]
+        state_label_text = alt.Chart(other_state_labels).mark_text(
             align="right", baseline="middle", fontSize=11
         ).encode(
             x=alt.value(150),
             y=alt.Y("state:N", sort=state_order, axis=None),
             text=alt.Text("state:N"),
         )
-        washington_name = alt.Chart(washington_label_data).mark_text(
+        interest_state_name = alt.Chart(interest_state_labels).mark_text(
             align="right",
             baseline="middle",
             fontSize=11,
@@ -1460,7 +1604,7 @@ def _(alt):
             y=alt.Y("state:N", sort=state_order, axis=None),
             text=alt.Text("state:N"),
         )
-        washington_arrow = alt.Chart(washington_label_data).mark_text(
+        interest_state_arrow = alt.Chart(interest_state_labels).mark_text(
             align="right", baseline="middle", fontSize=11
         ).encode(
             x=alt.value(60),
@@ -1468,7 +1612,7 @@ def _(alt):
             text=alt.value("▶"),
         )
         state_label_chart = (
-            alt.layer(state_label_text, washington_name, washington_arrow)
+            alt.layer(state_label_text, interest_state_name, interest_state_arrow)
             .resolve_scale(y="shared")
             .properties(width=160, height=760)
         )
@@ -1485,7 +1629,7 @@ def _(alt):
                 title=alt.TitleParams(
                     text=title,
                     subtitle=[
-                        "Muted # labels at bar ends show overall rank; hover on a segment for tax-type rank."
+                        "Muted # labels show overall rank; hover for tax-type rank. Arrows and bold labels mark states of interest."
                     ],
                     anchor="start",
                 ),
@@ -1495,11 +1639,18 @@ def _(alt):
     return (tax_mix_chart,)
 
 
-@app.cell
-def _(LATEST_FY, mo, separate_sales_tax_mix, tax_mix_chart):
+@app.cell(expand_output=True)
+def _(
+    LATEST_FY,
+    mo,
+    separate_sales_tax_mix,
+    states_of_interest,
+    tax_mix_chart,
+):
     separate_sales_chart = tax_mix_chart(
         separate_sales_tax_mix,
         f"State and local tax revenue by type — Census FY{LATEST_FY}",
+        states_of_interest.value,
     )
     mo.vstack(
         [
@@ -1510,11 +1661,18 @@ def _(LATEST_FY, mo, separate_sales_tax_mix, tax_mix_chart):
     return
 
 
-@app.cell
-def _(LATEST_FY, combined_sales_tax_mix, mo, tax_mix_chart):
+@app.cell(expand_output=True)
+def _(
+    LATEST_FY,
+    combined_sales_tax_mix,
+    mo,
+    states_of_interest,
+    tax_mix_chart,
+):
     combined_sales_chart = tax_mix_chart(
         combined_sales_tax_mix,
         f"State and local tax revenue, sales/excise combined — Census FY{LATEST_FY}",
+        states_of_interest.value,
     )
     mo.vstack(
         [
