@@ -1,0 +1,2 @@
+# Normalize recognized text files to LF in the index and every working tree.
+* text=auto eol=lf

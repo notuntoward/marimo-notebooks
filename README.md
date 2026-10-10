@@ -40,6 +40,18 @@ src/                         # Shared pure-Python utilities when needed
 .github/workflows/           # Notebook validation, intentionally no Dependabot
 ```
 
+## Line endings
+
+Text files in this repository use LF line endings on Windows, macOS, and Linux. Git enforces this in `.gitattributes`, and `.editorconfig` asks supported editors to write LF as well. This avoids platform-dependent file changes when contributors exchange commits.
+
+Set Git's conversion behavior locally in each clone:
+
+```bash
+git config --local core.autocrlf input
+```
+
+This repository-level setting does not change your global Git configuration. If your global `core.autocrlf` is `true`, the explicit LF policy in `.gitattributes` still controls this repository's text files.
+
 ## Notebook conventions
 
 - Keep inputs configurable through environment variables or marimo UI controls; do not commit personal vault paths or tokens.
