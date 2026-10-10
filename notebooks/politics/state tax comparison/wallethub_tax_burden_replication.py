@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["marimo", "pandas", "requests", "openpyxl", "xlrd", "matplotlib"]
+# dependencies = ["marimo", "pandas", "requests", "openpyxl", "xlrd", "altair"]
 # ///
 
 import marimo
@@ -13,11 +13,12 @@ app = marimo.App(width="medium")
 def _():
     import io, json, os, re, zipfile, pathlib
     from html.parser import HTMLParser
+    import altair as alt
     import marimo as mo
     import pandas as pd
     import requests
 
-    return HTMLParser, io, json, mo, os, pathlib, pd, re, requests, zipfile
+    return HTMLParser, alt, io, json, mo, os, pathlib, pd, re, requests, zipfile
 
 
 @app.cell
@@ -56,9 +57,10 @@ def _(mo):
     Each tax-type percentage is that tax revenue divided by the state's personal
     income, multiplied by 100. In other words, the denominator is not total tax
     revenue. WalletHub reports three categories: property tax, individual income
-    tax, and sales/excise tax. The final chart separates the latter into its two
-    underlying Census tax types (general sales and selective sales), so it displays
-    all four tax types individually:
+    tax, and sales/excise tax. The latest-year stacked bar chart separates the latter
+    into its two underlying Census tax types (general sales and selective sales), so
+    it displays all four tax types individually. A separate rank/value chart traces
+    each state's overall burden over the available years:
 
     ```text
     sales_excise_pct[state, year] =
@@ -995,41 +997,169 @@ def _(BEA_URL, EDITIONS, article_rankings, mo, pd, result_urls, results):
 
 
 @app.cell
-def _(LATEST_FY, mo, results):
-    import matplotlib.pyplot as plt
-    mo.stop(LATEST_FY not in results)
-    t = results[LATEST_FY].sort_values("total")
-    fig, ax = plt.subplots(figsize=(8, 10))
-    ax.barh(t.index, t["property"], label="Property tax")
-    ax.barh(t.index, t["income"], left=t["property"], label="Individual income tax")
-    ax.barh(
-        t.index,
-        t["general_sales"],
-        left=t["property"] + t["income"],
-        label="General sales tax",
+def _(alt, comparison_data, pd):
+    trend_data = comparison_data.reset_index()
+    trend_data = trend_data.loc[
+        trend_data["overall_rank"].notna()
+        & trend_data["total_burden_pct"].notna()
+        & trend_data["census_fy"].notna()
+    ].copy()
+    trend_data["overall_rank"] = pd.to_numeric(
+        trend_data["overall_rank"], errors="raise"
+    ).astype(int)
+    trend_data["total_burden_pct"] = pd.to_numeric(
+        trend_data["total_burden_pct"], errors="raise"
     )
-    ax.barh(
-        t.index,
-        t["selective_sales"],
-        left=t["property"] + t["income"] + t["general_sales"],
-        label="Selective sales tax",
+    trend_data["census_fy"] = pd.to_numeric(
+        trend_data["census_fy"], errors="raise"
+    ).astype(int)
+
+    state_highlight = alt.selection_point(
+        fields=["state"], on="click", clear="dblclick", name="highlight_state"
     )
-    ax.set_xlabel("Tax revenue as % of state personal income")
-    ax.set_title(f"State and local tax revenue by type — Census FY{LATEST_FY}")
-    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    mo.vstack([
-        mo.md(
-            "## Latest-year tax mix by state\n"
-            "Each segment is one Census tax type: property, individual income, "
-            "general sales, or selective sales. Each is state-and-local revenue "
-            "divided by that state's BEA personal income, multiplied by 100; it "
-            "is **not** a share of total tax revenue. WalletHub combines general "
-            "and selective sales as its sales/excise category; this chart splits "
-            "them out. The four segments sum to total burden."
+    trend_tooltip = [
+        alt.Tooltip("state:N", title="State"),
+        alt.Tooltip("period:N", title="Article edition / coverage"),
+        alt.Tooltip("census_fy:O", title="Census fiscal year"),
+        alt.Tooltip("overall_rank:Q", title="Overall rank", format=".0f"),
+        alt.Tooltip(
+            "total_burden_pct:Q", title="Total burden (%)", format=".2f"
         ),
-        fig,
-    ])
+    ]
+    rank_axis = alt.Y(
+        "overall_rank:Q",
+        title="Overall tax-burden rank (1 = highest)",
+        scale=alt.Scale(domain=[1, 50], reverse=True),
+        axis=alt.Axis(values=[1, 10, 20, 30, 40, 50]),
+    )
+    fiscal_year_axis = alt.X(
+        "census_fy:O",
+        title="Census fiscal year",
+        sort="ascending",
+        axis=alt.Axis(labelAngle=0),
+    )
+    rank_lines = alt.Chart(trend_data).mark_line(strokeWidth=1).encode(
+        x=fiscal_year_axis,
+        y=rank_axis,
+        detail="state:N",
+        color=alt.value("#777777"),
+        opacity=alt.condition(
+            state_highlight, alt.value(0.85), alt.value(0.12)
+        ),
+    )
+    rank_points = alt.Chart(trend_data).mark_point(
+        filled=True, size=48, stroke="white", strokeWidth=0.4
+    ).encode(
+        x=fiscal_year_axis,
+        y=rank_axis,
+        color=alt.Color(
+            "total_burden_pct:Q",
+            title="Total burden (%)",
+            scale=alt.Scale(scheme="viridis"),
+        ),
+        opacity=alt.condition(
+            state_highlight, alt.value(1), alt.value(0.15)
+        ),
+        tooltip=trend_tooltip,
+    )
+    trend_chart = (
+        alt.layer(rank_lines, rank_points)
+        .properties(width=760, height=260)
+        .add_params(state_highlight)
+        .facet(
+            row=alt.Row(
+                "data_source:N",
+                title=None,
+                sort=["WalletHub article", "Downloaded Census + BEA"],
+            )
+        )
+        .resolve_scale(x="shared", y="shared", color="shared")
+        .properties(
+            title=alt.TitleParams(
+                text="State tax burden over time: rank and value",
+                subtitle=[
+                    "Vertical position is overall rank (1 = highest); point color is total burden as a percent of personal income.",
+                    "WalletHub article editions are matched to estimated Census fiscal years; Census + BEA shows independent calculations.",
+                ],
+                anchor="start",
+            )
+        )
+    )
+    trend_chart
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## Latest-year tax mix by state
+
+    Each segment is one Census tax type: property, individual income, general
+    sales, or selective sales. Each is state-and-local revenue divided by that
+    state's BEA personal income, multiplied by 100; it is **not** a share of total
+    tax revenue. WalletHub combines general and selective sales as its sales/excise
+    category; this chart splits them out. The four segments sum to total burden.
+    """)
+    return
+
+
+@app.cell
+def _(LATEST_FY, alt, mo, results):
+    mo.stop(LATEST_FY not in results)
+    latest = results[LATEST_FY].rename_axis("state").reset_index()
+    tax_type_labels = {
+        "property": "Property tax",
+        "income": "Individual income tax",
+        "general_sales": "General sales tax",
+        "selective_sales": "Selective sales tax",
+    }
+    tax_type_order = list(tax_type_labels.values())
+    latest_long = latest.melt(
+        id_vars=["state", "total"],
+        value_vars=list(tax_type_labels),
+        var_name="tax_type",
+        value_name="burden_pct",
+    )
+    latest_long["tax_type"] = latest_long["tax_type"].map(tax_type_labels)
+    latest_chart = (
+        alt.Chart(latest_long)
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                "burden_pct:Q",
+                stack="zero",
+                title="Tax revenue as % of state personal income",
+            ),
+            y=alt.Y(
+                "state:N",
+                sort=alt.SortField(field="total", order="descending"),
+                title=None,
+            ),
+            color=alt.Color(
+                "tax_type:N",
+                sort=tax_type_order,
+                title="Tax type",
+                legend=alt.Legend(
+                    orient="top", direction="horizontal", columns=2
+                ),
+            ),
+            tooltip=[
+                alt.Tooltip("state:N", title="State"),
+                alt.Tooltip("tax_type:N", title="Tax type"),
+                alt.Tooltip("burden_pct:Q", title="Burden (%)", format=".2f"),
+                alt.Tooltip("total:Q", title="Total burden (%)", format=".2f"),
+            ],
+        )
+        .properties(
+            width=760,
+            height=760,
+            title=alt.TitleParams(
+                text=f"State and local tax revenue by type — Census FY{LATEST_FY}",
+                anchor="start",
+            ),
+        )
+    )
+    latest_chart
     return
 
 

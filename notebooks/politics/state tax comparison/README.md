@@ -162,6 +162,24 @@ year. This is different from the **WalletHub 2024 article edition**, which the
 notebook maps to Census FY2021. Tax-type and total ranks use descending values
 and minimum rank for ties, so rank 1 is highest.
 
+## Charts
+
+The notebook's rank/value trend graphic uses one panel for published WalletHub
+article rankings and one for the independent Census + BEA calculations. Each line
+connects a state's overall rank across Census fiscal years; rank 1 (highest burden)
+is at the top. Point color shows the total tax burden as a percentage of personal
+income. Hover over a point to see its state, article edition or coverage label,
+fiscal year, rank, and exact burden value. Click a point to highlight that state's
+line across both panels; double-click to clear the highlight. WalletHub article
+years are mapped to estimated fiscal years as described above, so the panels are
+not claims about WalletHub's undisclosed data vintage.
+
+The latest-year stacked bar chart shows property, individual income, general sales,
+and selective sales separately. Every segment is the corresponding state-and-local
+revenue divided by personal income, not a fraction of total taxes collected. The
+four segments sum to the total burden; general and selective sales are combined only
+when comparing with WalletHub's sales/excise category.
+
 ## Full state tables
 
 The notebook displays the state-by-period comparison with WalletHub and downloaded
