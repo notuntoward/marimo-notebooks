@@ -1533,7 +1533,7 @@ def _(mo):
     selective sales into one sales/excise segment, ordered income, sales/excise,
     then property. Every segment is state-and-local revenue divided by that
     state's BEA personal income, multiplied by 100; it is **not** a share of
-    total tax revenue. A muted `#rank` at the end of each bar gives its overall
+    total tax revenue. A muted rank label at the end of each bar gives its overall
     rank; hover over a segment for its individual tax-type rank. A `▶` marker
     precedes bold state-of-interest labels on the vertical labels; rank order is unchanged.
     """)
@@ -1608,7 +1608,7 @@ def _(alt):
                 "burden_pct:Q",
                 stack="zero",
                 scale=x_scale,
-                title="Tax revenue as % of state personal income",
+                title="Tax Burden (state tax revenue as % of total state income)",
             ),
             y=alt.Y(
                 "state:N", sort=state_order, title=None, axis=hidden_state_axis
@@ -1644,12 +1644,12 @@ def _(alt):
             ["state", "total", "rank_total"]
         ].drop_duplicates("state").copy()
         overall_rank_labels["overall_rank_label"] = (
-            "#" + overall_rank_labels["rank_total"].astype(str)
+            overall_rank_labels["rank_total"].astype(str)
         )
         labels = alt.Chart(overall_rank_labels).mark_text(
             align="left", baseline="middle", dx=5, fontSize=9, color="#666666"
         ).encode(
-            x=alt.X("total:Q", scale=x_scale, axis=None),
+            x=alt.X("total:Q", scale=x_scale),
             y=alt.Y("state:N", sort=state_order, axis=hidden_state_axis),
             text="overall_rank_label:N",
         )
@@ -1703,7 +1703,7 @@ def _(alt):
                 title=alt.TitleParams(
                     text=title,
                     subtitle=[
-                        "Muted # labels show overall rank; hover for tax-type rank. Arrows and bold labels mark states of interest."
+                        "Muted labels show overall rank; hover for tax-type rank. Arrows and bold labels mark states of interest."
                     ],
                     anchor="start",
                 ),
