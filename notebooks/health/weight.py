@@ -14,7 +14,7 @@
 
 import marimo
 
-__generated_with = "0.25.1"
+__generated_with = "0.24.0"
 app = marimo.App(width="medium")
 
 
@@ -504,9 +504,9 @@ def _(inFNm):
     df_raw_file = read_garmin_weight_csv(inFNm)
 
     try:
-        def _strip_lbs(x):
+        def _strip_unit(x):
             if isinstance(x, str):
-                val = x.split()[0]
+                val = x.strip().rstrip("%").strip().split()[0]
                 try:
                     return float(val)
                 except ValueError:
@@ -515,20 +515,40 @@ def _(inFNm):
 
         date_col = "date" if "date" in df_raw_file.columns else ("time" if "time" in df_raw_file.columns else None)
         weight_col = None
+        body_fat_col = None
+        muscle_col = None
         for col in df_raw_file.columns:
-            if "weight" in col:
+            _cl = str(col).lower()
+            if "weight" in _cl and weight_col is None:
                 weight_col = col
-                break
+            elif ("body fat" in _cl or "fat" in _cl) and body_fat_col is None:
+                body_fat_col = col
+            elif ("muscle" in _cl or "smm" in _cl) and muscle_col is None:
+                muscle_col = col
 
         if date_col is not None and weight_col is not None:
             df_raw_file["date"] = _pd.to_datetime(df_raw_file[date_col], errors="coerce")
-            df_raw_file["weight"] = df_raw_file[weight_col].apply(_strip_lbs)
+            df_raw_file["weight"] = df_raw_file[weight_col].apply(_strip_unit)
             df_raw_file["weight"] = _pd.to_numeric(df_raw_file["weight"], errors="coerce")
+
+            if body_fat_col is not None:
+                df_raw_file["body_fat"] = df_raw_file[body_fat_col].apply(_strip_unit)
+                df_raw_file["body_fat"] = _pd.to_numeric(df_raw_file["body_fat"], errors="coerce")
+            if muscle_col is not None:
+                df_raw_file["muscle_mass"] = df_raw_file[muscle_col].apply(_strip_unit)
+                df_raw_file["muscle_mass"] = _pd.to_numeric(df_raw_file["muscle_mass"], errors="coerce")
 
         if not df_raw_file.empty:
             df_raw_file = df_raw_file.dropna(subset=["date", "weight"]).sort_values("date").reset_index(drop=True)
             df_raw_file["date"] = df_raw_file["date"].dt.normalize()
-            df_raw_file = df_raw_file.groupby("date", as_index=False)["weight"].mean().sort_values("date").reset_index(drop=True)
+
+            _agg_dict = {"weight": "mean"}
+            if "body_fat" in df_raw_file:
+                _agg_dict["body_fat"] = "mean"
+            if "muscle_mass" in df_raw_file:
+                _agg_dict["muscle_mass"] = "mean"
+
+            df_raw_file = df_raw_file.groupby("date", as_index=False).agg(_agg_dict).sort_values("date").reset_index(drop=True)
 
             _full_dates = _pd.date_range(start=df_raw_file["date"].min(), end=df_raw_file["date"].max(), freq="D")
             df_raw_file = df_raw_file.set_index("date").reindex(_full_dates).rename_axis("date").reset_index().sort_values("date", ascending=True).reset_index(drop=True)
@@ -549,7 +569,8 @@ def _(inFNm):
             if _curr_gap > 0:
                 _gap_lengths.append(_curr_gap)
 
-            df_raw_file["weight"] = df_raw_file["weight"].interpolate(method="linear").bfill().ffill()
+            for _c in _agg_dict.keys():
+                df_raw_file[_c] = df_raw_file[_c].interpolate(method="linear").bfill().ffill()
 
             print("Missing Points Interpolation Summary:")
             print(f"Number of missing points interpolated: {_num_missing} / {_total_points} ({_pct_missing:.2f}%)")
@@ -567,14 +588,6 @@ def _(inFNm):
 
 
 @app.cell(hide_code=True)
-def _(df_raw_file, results_df):
-    print(f"start: {results_df.date.min()}, end: {results_df.date.max()}")
-
-    df_raw_file
-    return
-
-
-@app.cell(hide_code=True)
 def _(mo, results_df):
     _d_start = results_df["date"].iloc[0].strftime("%b %d, %Y")
     _d_end = results_df["date"].iloc[-1].strftime("%b %d, %Y")
@@ -588,6 +601,17 @@ def _(mo, results_df):
         full_width=True,
     )
     return (time_slider,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    plot_layout_mode = mo.ui.radio(
+        options=["Tabs", "Stacked"],
+        value="Tabs",
+        label="Plot View Layout:",
+        inline=True,
+    )
+    return (plot_layout_mode,)
 
 
 @app.cell(hide_code=True)
@@ -685,33 +709,86 @@ def _(df_raw, max_window, min_window, poly_order, select_best_window):
 
     best_window, best_gcv_score, all_scores = select_best_window(
         df_raw["weight"].to_numpy(), _polyorder, _candidate_windows)
-    return all_scores, best_window
+
+    metric_scores = {}
+    for _label, _col in (("Weight", "weight"), ("Body Fat", "body_fat"), ("Skeletal Muscle Mass", "muscle_mass")):
+        if _col not in df_raw or not df_raw[_col].notna().any():
+            continue
+        _own_best, _, _scores = select_best_window(df_raw[_col].to_numpy(), _polyorder, _candidate_windows)
+        metric_scores[_label] = (_own_best, _scores)
+    return best_window, metric_scores
 
 
 @app.cell(hide_code=True)
-def _(all_scores, alt, best_window, mo, pd):
-    _scores_df = pd.DataFrame(all_scores, columns=["window", "gcv_score"])
+def _(
+    alt,
+    best_window,
+    metric_scores,
+    mo,
+    pd,
+    rate_half_life_days,
+    rate_window_days,
+):
+    _rows = []
+    for _label, (_own_best, _scores) in metric_scores.items():
+        _panel_df = pd.DataFrame(_scores, columns=["window", "gcv_score"])
+        _panel_df["metric"] = _label
+        _panel_df["gcv_normalized"] = _panel_df["gcv_score"] / _panel_df["gcv_score"].mean()
+        _rows.append(_panel_df)
+    _scores_df = pd.concat(_rows, ignore_index=True)
+    _own_df = pd.DataFrame(
+        [{"metric": _l, "window": _b} for _l, (_b, _) in metric_scores.items()]
+    )
 
-    _chart = (
+    _color = alt.Color(
+        "metric:N",
+        title="Metric",
+        scale=alt.Scale(domain=list(metric_scores), range=["#4682b4", "#d97706", "#16a34a"][: len(metric_scores)]),
+    )
+    _line = (
         alt.Chart(_scores_df)
         .mark_line(point=True)
         .encode(
             x=alt.X("window:Q", title="Window length (days)"),
-            y=alt.Y("gcv_score:Q", title="GCV score (lower = better)"),
+            y=alt.Y("gcv_normalized:Q", title="GCV score / metric mean (lower = better)", scale=alt.Scale(zero=False)),
+            color=_color,
+            tooltip=[
+                "metric:N",
+                "window:Q",
+                alt.Tooltip("gcv_score:Q", title="GCV score (raw)", format=".5g"),
+                alt.Tooltip("gcv_normalized:Q", title="GCV / mean", format=".3f"),
+            ],
         )
-
-        .properties(title=f"GCV score vs. window length — selected: {best_window} days", width=600, height=300)
+    )
+    _own_rule = (
+        alt.Chart(_own_df)
+        .mark_rule(strokeDash=[4, 3])
+        .encode(
+            x="window:Q",
+            color=_color,
+            tooltip=["metric:N", alt.Tooltip("window:Q", title="own GCV optimum (days)")],
+        )
+    )
+    _used_rule = (
+        alt.Chart(pd.DataFrame({"window": [best_window]}))
+        .mark_rule(color="red", strokeWidth=2)
+        .encode(x="window:Q", tooltip=[alt.Tooltip("window:Q", title="window applied (days)")])
+    )
+    _chart = alt.layer(_line, _own_rule, _used_rule).properties(
+        title="GCV score vs. window length (each metric normalized to its mean)", width=650, height=350
     )
 
-    _rule = alt.Chart(_scores_df[_scores_df["window"] == best_window]).mark_rule(color="red").encode(x="window:Q")
-
+    _own_text = ", ".join(f"{_l}: {_b} d" for _l, (_b, _) in metric_scores.items())
     mo.vstack(
         [
             mo.md(
-                f"**Selected window length: {best_window} days** "
-                f"(minimizes GCV score across the candidate range tested)."
+                f"**Savitzky–Golay window applied to every metric: {best_window} days** "
+                f"(red line, the GCV minimum for Weight). Each metric's own GCV minimum is the "
+                f"dashed line in its color ({_own_text}).\n\n"
+                f"**Trailing causal WLS (all metrics):** lookback window {int(rate_window_days.value)} days, "
+                f"recency half-life {int(rate_half_life_days.value)} days (set by the sliders, not by GCV)."
             ),
-            mo.ui.altair_chart(_chart + _rule),
+            _chart,
         ]
     )
     return
@@ -734,308 +811,389 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
+def weight_and_rate_cell(
+    go,
+    make_subplots,
+    mo,
+    np,
+    plot_layout_mode,
+    rate_window_days,
+    results_df,
+    time_slider,
+):
     _idx = int(time_slider.value)
     _sel_row = results_df.iloc[_idx]
     _sel_date = _sel_row["date"]
 
-    # Unified color palette for traces, markers, and readout text
-    _raw_color = "#4682b4"  # Steel blue matching Raw Weight
-    _sg_weight_color = "crimson"  # Crimson matching SG Smoothed Weight
-    _sg_rate_color = "#1d4ed8"  # Royal blue matching Centered SG Retrospective Rate
-    _trailing_rate_color = "#059669"  # Emerald green matching Trailing WLS Causal Nowcast
-    _sg_edge_rate_color = "#ea580c"  # Deep orange matching SG Boundary Derivative Diagnostic (high contrast with white text)
-
-    # Restrict boundary/edge traces to edge regions (NaN in interior) so they do not overlap
-    # the centered solid lines or intercept hover events in the interior.
-    # Include the single boundary contact point on each side so dashed edge lines seamlessly meet solid centered lines.
-    _is_edge_connected = results_df["is_sg_edge"].copy()
+    # Boundary connection mask (1 point overlap at each boundary)
+    _is_edge_connected = np.array(results_df["is_sg_edge"], copy=True)
     _centered_indices = np.where(results_df["is_centered_sg"])[0]
     if len(_centered_indices) > 0:
-        _is_edge_connected.iloc[_centered_indices[0]] = True
-        _is_edge_connected.iloc[_centered_indices[-1]] = True
+        _is_edge_connected[_centered_indices[0]] = True
+        _is_edge_connected[_centered_indices[-1]] = True
 
-    _edge_weight = np.where(_is_edge_connected, results_df["sg_weight_full"], np.nan)
-    _edge_rate = np.where(_is_edge_connected, results_df["sg_weekly_rate_full"], np.nan)
+    def _build_metric_chart(
+        title_metric,
+        unit,
+        rate_unit,
+        raw_vals,
+        smooth_centered_vals,
+        smooth_full_vals,
+        rate_centered_vals,
+        rate_full_vals,
+        trailing_rate_vals,
+        trailing_lower_vals,
+        trailing_upper_vals,
+        color_raw,
+        color_smooth,
+        color_rate,
+        color_trailing,
+        color_edge,
+    ):
+        _edge_level = np.where(_is_edge_connected, smooth_full_vals, np.nan)
+        _edge_rate = np.where(_is_edge_connected, rate_full_vals, np.nan)
 
-    _fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.10,
-        subplot_titles=(
-            "1. Raw Weight vs. SG-Smoothed Weight Trend",
-            "2. Weekly Rate of Weight Change: Centered SG Retrospective vs. Trailing Causal Nowcast",
-        ),
-    )
+        _fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.10,
+            subplot_titles=(
+                f"1. Raw {title_metric} vs. SG-Smoothed Trend",
+                f"2. Weekly Rate of {title_metric} Change: Centered SG Retrospective vs. Trailing Causal Nowcast",
+            ),
+        )
 
-    # --- Subplot 1: Weight ---
-    # 1. Raw Weight Scatter/Line
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"],
-            y=results_df["weight"],
-            mode="lines+markers",
-            name="Raw Weight",
-            legendrank=100,
-            line=dict(color="rgba(70, 130, 180, 0.4)", width=1.5),
-            marker=dict(color=_raw_color, size=4),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Raw Weight: %{y:.1f} lbs<extra></extra>",
+        # --- Subplot 1: Level ---
+        # 1. Raw Data Scatter/Line
+        _fig.add_trace(
+            go.Scatter(
+                x=results_df["date"],
+                y=raw_vals,
+                mode="lines+markers",
+                name=f"Raw {title_metric}",
+                legendrank=100,
+                line=dict(color=color_raw, width=1.5),
+                opacity=0.6,
+                marker=dict(color=color_raw, size=4),
+                hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>Raw {title_metric}: %{{y:.1f}} {unit}<extra></extra>",
+                hoverlabel=dict(bgcolor=color_raw, font=dict(color="white")),
+            ),
+            row=1,
+            col=1,
+        )
+
+        # 2. Provisional Boundary SG Level (Dashed, edge intervals only)
+        _fig.add_trace(
+            go.Scatter(
+                x=results_df["date"],
+                y=_edge_level,
+                mode="lines",
+                name=f"Provisional SG Edge {title_metric}",
+                legendrank=120,
+                line=dict(color=color_smooth, width=1.5, dash="dash"),
+                opacity=0.6,
+                hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>Edge SG {title_metric}: %{{y:.2f}} {unit}<extra></extra>",
+                hoverlabel=dict(bgcolor=color_smooth, font=dict(color="white")),
+            ),
+            row=1,
+            col=1,
+        )
+
+        # 3. Main Centered SG Smoothed Level (Solid, rendered on top of edge line)
+        _fig.add_trace(
+            go.Scatter(
+                x=results_df["date"],
+                y=smooth_centered_vals,
+                mode="lines",
+                name=f"Centered SG {title_metric}",
+                legendrank=110,
+                line=dict(color=color_smooth, width=2.5),
+                hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>Centered SG {title_metric}: %{{y:.2f}} {unit}<extra></extra>",
+                hoverlabel=dict(bgcolor=color_smooth, font=dict(color="white")),
+            ),
+            row=1,
+            col=1,
+        )
+
+        # Selected Date Marker on Subplot 1
+        _sel_smooth_val = float(smooth_full_vals[_idx])
+        _fig.add_trace(
+            go.Scatter(
+                x=[_sel_date],
+                y=[_sel_smooth_val],
+                mode="markers",
+                name=f"Selected Date {title_metric}",
+                marker=dict(
+                    color=color_smooth,
+                    size=10,
+                    symbol="diamond",
+                    line=dict(color="white", width=1.5),
+                ),
+                showlegend=False,
+                hovertemplate=f"Selected Date: %{{x|%Y-%m-%d}}<br>Smoothed: %{{y:.2f}} {unit}<extra></extra>",
+                hoverlabel=dict(bgcolor=color_smooth, font=dict(color="white")),
+            ),
+            row=1,
+            col=1,
+        )
+        _fig.add_vline(x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5, row=1, col=1)
+
+        # --- Subplot 2: Rate of Change ---
+        _fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.0, row=2, col=1)
+
+        # 1. Diagnostic SG Boundary Derivative (Dashed, edge intervals only, added first)
+        _fig.add_trace(
+            go.Scatter(
+                x=results_df["date"],
+                y=_edge_rate,
+                mode="lines",
+                name="SG Boundary Derivative (Diagnostic Only)",
+                legendrank=230,
+                line=dict(color=color_edge, width=1.2, dash="dash"),
+                opacity=0.6,
+                hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>SG Edge Derivative: %{{y:.2f}} {rate_unit} (linear diagnostic)<extra></extra>",
+                hoverlabel=dict(bgcolor=color_edge, font=dict(color="white")),
+            ),
+            row=2,
+            col=1,
+        )
+
+        # 2. Trailing WLS 95% Confidence Band
+        _ci_x = results_df["date"].tolist() + results_df["date"].tolist()[::-1]
+        _ci_y = trailing_upper_vals.tolist() + trailing_lower_vals.tolist()[::-1]
+        _fig.add_trace(
+            go.Scatter(
+                x=_ci_x,
+                y=_ci_y,
+                fill="toself",
+                fillcolor="rgba(16, 185, 129, 0.15)",
+                line=dict(color="rgba(255,255,255,0)"),
+                name="Trailing Rate 95% CI Band",
+                legendrank=220,
+                hoverinfo="skip",
+            ),
+            row=2,
+            col=1,
+        )
+
+        # 3. Trailing Causal WLS Nowcast Rate (Solid)
+        _fig.add_trace(
+            go.Scatter(
+                x=results_df["date"],
+                y=trailing_rate_vals,
+                mode="lines",
+                name="Trailing WLS Current Rate (Causal Nowcast)",
+                legendrank=210,
+                line=dict(color=color_trailing, width=2.5),
+                hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>Trailing Rate: %{{y:.2f}} {rate_unit}<extra></extra>",
+                hoverlabel=dict(bgcolor=color_trailing, font=dict(color="white")),
+            ),
+            row=2,
+            col=1,
+        )
+
+        # 4. Primary Centered SG Historical Rate (Solid, on top)
+        _fig.add_trace(
+            go.Scatter(
+                x=results_df["date"],
+                y=rate_centered_vals,
+                mode="lines",
+                name="Centered SG Historical Rate (Retrospective)",
+                legendrank=200,
+                line=dict(color=color_rate, width=2.5),
+                hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>Centered SG Rate: %{{y:.2f}} {rate_unit}<extra></extra>",
+                hoverlabel=dict(bgcolor=color_rate, font=dict(color="white")),
+            ),
+            row=2,
+            col=1,
+        )
+
+        # Selected Date Marker on Subplot 2
+        _has_c_rate = not np.isnan(rate_centered_vals[_idx])
+        _sel_rate_num = float(rate_centered_vals[_idx]) if _has_c_rate else float(trailing_rate_vals[_idx])
+        _sel_rate_marker_color = color_rate if _has_c_rate else color_trailing
+
+        _fig.add_trace(
+            go.Scatter(
+                x=[_sel_date],
+                y=[_sel_rate_num],
+                mode="markers",
+                name=f"Selected Date {title_metric} Rate",
+                marker=dict(
+                    color=_sel_rate_marker_color,
+                    size=10,
+                    symbol="diamond",
+                    line=dict(color="white", width=1.5),
+                ),
+                showlegend=False,
+                hovertemplate=(
+                    f"Selected Date: %{{x|%Y-%m-%d}}<br>"
+                    + (f"Centered SG Rate: %{{y:.2f}} {rate_unit}" if _has_c_rate else f"Trailing Rate: %{{y:.2f}} {rate_unit}")
+                    + "<extra></extra>"
+                ),
+                hoverlabel=dict(bgcolor=_sel_rate_marker_color, font=dict(color="white")),
+            ),
+            row=2,
+            col=1,
+        )
+        _fig.add_vline(x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5, row=2, col=1)
+
+        _fig.update_layout(
+            template="plotly_white",
+            width=800,
+            height=450,
+            margin=dict(t=65, b=25, l=55, r=25),
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.12,
+                xanchor="center",
+                x=0.5,
+                font=dict(size=11),
+            ),
             hoverlabel=dict(
-                bgcolor=_raw_color,
-                font=dict(color="white"),
+                font=dict(family="system-ui, -apple-system, sans-serif", size=12, color="white"),
+                bordercolor="rgba(255, 255, 255, 0.4)",
             ),
+        )
+
+        _fig.update_yaxes(title_text=f"{title_metric} ({unit})", row=1, col=1)
+        _fig.update_yaxes(title_text=f"Rate ({rate_unit})", row=2, col=1)
+        _fig.update_xaxes(title_text="Date", row=2, col=1)
+
+        # Readout UI
+        _sel_raw_val = float(raw_vals[_idx])
+        _sel_full_rate = float(rate_full_vals[_idx])
+        _sel_trailing_rate = float(trailing_rate_vals[_idx])
+        _sel_trailing_l = float(trailing_lower_vals[_idx])
+        _sel_trailing_u = float(trailing_upper_vals[_idx])
+
+        _sg_status = (
+            f'<span style="color:{color_rate}; font-weight:bold;">{rate_centered_vals[_idx]:+.2f} {rate_unit}</span> (Centered Retrospective)'
+            if _has_c_rate
+            else f'<span style="color:{color_edge}; font-weight:bold;">{_sel_full_rate:+.2f} {rate_unit}</span> (SG Edge Diagnostic — linear boundary fit)'
+        )
+
+        _line_date = '<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="2" stroke-dasharray="2,2"/></svg>'
+        _line_raw_svg = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{color_raw}" stroke-width="2.5"/></svg>'
+        _line_smooth_svg = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{color_smooth}" stroke-width="2.5"/></svg>'
+        _line_trailing_svg = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{color_trailing}" stroke-width="2.5"/></svg>'
+
+        _curr_dash = 'stroke-dasharray="4,3"' if not _has_c_rate else ''
+        _curr_c = color_rate if _has_c_rate else color_edge
+        _line_sg_rate_svg = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_curr_c}" stroke-width="2.5" {_curr_dash}/></svg>'
+
+        _readout = mo.md(f"""
+        <div style="background: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid #cbd5e1; font-family: system-ui, sans-serif; font-size: 13px; color: #0f172a; margin-top: 4px;">
+          <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; font-weight: 600; margin-bottom: 6px;">
+            <div>{_line_date}Date: {_sel_date.strftime('%b %d, %Y')}</div>
+            <div>{_line_raw_svg}Raw {title_metric}: <span style="color:{color_raw}; font-weight:bold;">{_sel_raw_val:.1f} {unit}</span></div>
+            <div>{_line_smooth_svg}SG Smoothed {title_metric}: <span style="color:{color_smooth}; font-weight:bold;">{_sel_smooth_val:.2f} {unit}</span></div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; border-top: 1px solid #e2e8f0; padding-top: 6px;">
+            <div>{_line_trailing_svg}<strong>Trailing WLS Causal Nowcast:</strong> <span style="color:{color_trailing}; font-weight:bold;">{_sel_trailing_rate:+.2f} {rate_unit}</span> (95% CI: [{_sel_trailing_l:+.2f}, {_sel_trailing_u:+.2f}])</div>
+            <div>{_line_sg_rate_svg}<strong>SG Retrospective Rate:</strong> {_sg_status}</div>
+          </div>
+        </div>
+        """)
+
+        return _fig, _readout
+
+    # (tab label, section heading, title, unit, rate unit, results_df columns, colors)
+    # columns: raw, centered level, full level, centered rate, full rate, trailing rate, CI lower, CI upper
+    _metric_specs = [
+        (
+            "🏋️ Weight", "Weight (lbs)", "Weight", "lbs", "lbs/wk",
+            ["weight", "sg_weight_centered", "sg_weight_full", "sg_weekly_rate_centered",
+             "sg_weekly_rate_full", "trailing_weekly_rate", "trailing_rate_lower_95", "trailing_rate_upper_95"],
+            ("#4682b4", "crimson", "#1d4ed8", "#059669", "#ea580c"),
         ),
-        row=1,
-        col=1,
-    )
-
-    # 2. Boundary SG Smoothed Weight (Dashed Crimson, diagnostic edge only)
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"],
-            y=_edge_weight,
-            mode="lines",
-            name="Provisional SG Edge Weight",
-            legendrank=120,
-            line=dict(color=_sg_weight_color, width=1.5, dash="dash"),
-            opacity=0.6,
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Edge SG Weight: %{y:.2f} lbs<extra></extra>",
-            hoverlabel=dict(
-                bgcolor=_sg_weight_color,
-                font=dict(color="white"),
-            ),
+        (
+            "📊 Body Fat", "Body Fat (%)", "Body Fat", "%", "%/wk",
+            ["body_fat", "sg_body_fat_centered", "sg_body_fat_full", "sg_body_fat_rate_centered",
+             "sg_body_fat_rate_full", "trailing_body_fat_rate", "trailing_body_fat_lower_95", "trailing_body_fat_upper_95"],
+            ("#d97706", "#7c3aed", "#4338ca", "#0d9488", "#e11d48"),
         ),
-        row=1,
-        col=1,
-    )
-
-    # 3. Main Centered SG Smoothed Weight (Solid Crimson, rendered on top of edge line)
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"],
-            y=results_df["sg_weight_centered"],
-            mode="lines",
-            name="Centered SG Weight",
-            legendrank=110,
-            line=dict(color=_sg_weight_color, width=2.5),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Centered SG Weight: %{y:.2f} lbs<extra></extra>",
-            hoverlabel=dict(
-                bgcolor=_sg_weight_color,
-                font=dict(color="white"),
-            ),
+        (
+            "💪 Skeletal Muscle Mass", "Skeletal Muscle Mass (lbs)", "Skeletal Muscle Mass", "lbs", "lbs/wk",
+            ["muscle_mass", "sg_muscle_centered", "sg_muscle_full", "sg_muscle_rate_centered",
+             "sg_muscle_rate_full", "trailing_muscle_rate", "trailing_muscle_lower_95", "trailing_muscle_upper_95"],
+            ("#0284c7", "#d97706", "#2563eb", "#16a34a", "#dc2626"),
         ),
-        row=1,
-        col=1,
+    ]
+
+    # Each figure is built once and shown in exactly one place (never both in tabs and stacked)
+    _views = {}
+    for _tab, _heading, _title, _unit, _rate_unit, _cols, _colors in _metric_specs:
+        if not all(_c in results_df for _c in _cols):
+            continue
+        _fig, _readout = _build_metric_chart(
+            _title, _unit, _rate_unit,
+            *[results_df[_c].to_numpy() for _c in _cols],
+            *_colors,
+        )
+        _views[_tab] = (_heading, mo.vstack([_fig, _readout], gap=0.5))
+
+    if "muscle_share_of_loss_pct" in results_df:
+        _share = results_df["muscle_share_of_loss_pct"]
+        _share_fig = go.Figure()
+        _share_fig.add_trace(
+            go.Scatter(
+                x=results_df["date"],
+                y=_share,
+                mode="lines+markers",
+                name="Muscle share of weight loss",
+                line=dict(color="#7c3aed", width=2.5),
+                marker=dict(size=4),
+                connectgaps=False,
+                hovertemplate="Date: %{x|%Y-%m-%d}<br>Muscle share of loss: %{y:.0f}%<extra></extra>",
+            )
+        )
+        _share_fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.0)
+        _share_fig.add_vline(x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5)
+        _share_fig.update_layout(
+            template="plotly_white",
+            width=800,
+            height=320,
+            margin=dict(t=40, b=25, l=55, r=25),
+            title=f"Percent of weight loss that is muscle (trailing {int(rate_window_days.value)} days)",
+        )
+        _share_fig.update_yaxes(title_text="% of weight lost")
+        _share_fig.update_xaxes(title_text="Date")
+        _sel_share = _share.iloc[_idx]
+        _share_text = (
+            f"**{_sel_date.strftime('%b %d, %Y')}:** {_sel_share:.0f}% of the weight lost over the preceding "
+            f"{int(rate_window_days.value)} days was muscle."
+            if not np.isnan(_sel_share)
+            else f"**{_sel_date.strftime('%b %d, %Y')}:** undefined (smoothed weight did not drop by at least 2 lb "
+            f"over the preceding {int(rate_window_days.value)} days)."
+        )
+        _views["🧬 Muscle % of Loss"] = (
+            "Muscle Share of Weight Loss (%)",
+            mo.vstack([_share_fig, mo.md(_share_text)], gap=0.5),
+        )
+
+    _stacked_elements = []
+    for _i, (_heading, _view) in enumerate(_views.values(), start=1):
+        if _i > 1:
+            _stacked_elements.append(mo.md("---"))
+        _stacked_elements.extend([mo.md(f"### {_i}. {_heading}"), _view])
+
+    _active_content = (
+        mo.ui.tabs({_tab: _v for _tab, (_h, _v) in _views.items()})
+        if plot_layout_mode.value == "Tabs"
+        else mo.vstack(_stacked_elements, gap=0.5)
     )
-
-    # Selected Date Marker on Subplot 1
-    _fig.add_trace(
-        go.Scatter(
-            x=[_sel_date],
-            y=[_sel_row["smoothed_weight"]],
-            mode="markers",
-            name="Selected Date Weight",
-            marker=dict(
-                color=_sg_weight_color,
-                size=10,
-                symbol="diamond",
-                line=dict(color="white", width=1.5),
-            ),
-            showlegend=False,
-            hovertemplate="Selected Date: %{x|%Y-%m-%d}<br>Smoothed: %{y:.2f} lbs<extra></extra>",
-            hoverlabel=dict(
-                bgcolor=_sg_weight_color,
-                font=dict(color="white"),
-            ),
-        ),
-        row=1,
-        col=1,
-    )
-    _fig.add_vline(
-        x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5, row=1, col=1
-    )
-
-    # --- Subplot 2: Rate of Change ---
-    _fig.add_hline(
-        y=0, line_dash="dash", line_color="gray", line_width=1.0, row=2, col=1
-    )
-
-    # 1. Diagnostic SG Boundary Derivative (Dashed Orange, edge intervals only, added first)
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"],
-            y=_edge_rate,
-            mode="lines",
-            name="SG Boundary Derivative (Diagnostic Only)",
-            legendrank=230,
-            line=dict(color=_sg_edge_rate_color, width=1.2, dash="dash"),
-            opacity=0.6,
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>SG Edge Derivative: %{y:.2f} lbs/wk (linear diagnostic)<extra></extra>",
-            hoverlabel=dict(
-                bgcolor=_sg_edge_rate_color,
-                font=dict(color="white"),
-            ),
-        ),
-        row=2,
-        col=1,
-    )
-
-    # 2. Trailing WLS 95% Confidence Band
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"].tolist() + results_df["date"].tolist()[::-1],
-            y=results_df["trailing_rate_upper_95"].tolist()
-            + results_df["trailing_rate_lower_95"].tolist()[::-1],
-            fill="toself",
-            fillcolor="rgba(16, 185, 129, 0.15)",
-            line=dict(color="rgba(255,255,255,0)"),
-            name="Trailing Rate 95% CI Band",
-            legendrank=220,
-            hoverinfo="skip",
-        ),
-        row=2,
-        col=1,
-    )
-
-    # 3. Trailing Causal WLS Nowcast Rate (Solid Emerald Green)
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"],
-            y=results_df["trailing_weekly_rate"],
-            mode="lines",
-            name="Trailing WLS Current Rate (Causal Nowcast)",
-            legendrank=210,
-            line=dict(color=_trailing_rate_color, width=2.5),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Trailing Rate: %{y:.2f} lbs/wk<extra></extra>",
-            hoverlabel=dict(
-                bgcolor=_trailing_rate_color,
-                font=dict(color="white"),
-            ),
-        ),
-        row=2,
-        col=1,
-    )
-
-    # 4. Primary Centered SG Historical Rate (Solid Blue, rendered on top of boundary diagnostic)
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"],
-            y=results_df["sg_weekly_rate_centered"],
-            mode="lines",
-            name="Centered SG Historical Rate (Retrospective)",
-            legendrank=200,
-            line=dict(color=_sg_rate_color, width=2.5),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Centered SG Rate: %{y:.2f} lbs/wk<extra></extra>",
-            hoverlabel=dict(
-                bgcolor=_sg_rate_color,
-                font=dict(color="white"),
-            ),
-        ),
-        row=2,
-        col=1,
-    )
-
-    # Determine active rate value and marker color on Subplot 2
-    _has_centered = not np.isnan(_sel_row["sg_weekly_rate_centered"])
-    _sel_rate_val = (
-        _sel_row["sg_weekly_rate_centered"]
-        if _has_centered
-        else _sel_row["trailing_weekly_rate"]
-    )
-    _sel_rate_marker_color = _sg_rate_color if _has_centered else _trailing_rate_color
-
-    # Selected Date Marker on Subplot 2
-    _fig.add_trace(
-        go.Scatter(
-            x=[_sel_date],
-            y=[_sel_rate_val],
-            mode="markers",
-            name="Selected Date Rate",
-            marker=dict(
-                color=_sel_rate_marker_color,
-                size=10,
-                symbol="diamond",
-                line=dict(color="white", width=1.5),
-            ),
-            showlegend=False,
-            hovertemplate=(
-                f"Selected Date: %{{x|%Y-%m-%d}}<br>"
-                + ("Centered SG Rate: %{y:.2f} lbs/wk" if _has_centered else "Trailing Rate: %{y:.2f} lbs/wk")
-                + "<extra></extra>"
-            ),
-            hoverlabel=dict(
-                bgcolor=_sel_rate_marker_color,
-                font=dict(color="white"),
-            ),
-        ),
-        row=2,
-        col=1,
-    )
-    _fig.add_vline(
-        x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5, row=2, col=1
-    )
-
-    _fig.update_layout(
-        template="plotly_white",
-        width=800,
-        height=450,
-        margin=dict(t=65, b=25, l=55, r=25),
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.12,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=11),
-        ),
-        hoverlabel=dict(
-            font=dict(family="system-ui, -apple-system, sans-serif", size=12, color="white"),
-            bordercolor="rgba(255, 255, 255, 0.4)",
-        ),
-    )
-
-    _fig.update_yaxes(title_text="Weight (lbs)", row=1, col=1)
-    _fig.update_yaxes(title_text="Rate (lbs/week)", row=2, col=1)
-    _fig.update_xaxes(title_text="Date", row=2, col=1)
-
-    # Status & Readout Banner using line indicators matching plot trace styles
-    _is_edge = _sel_row["is_sg_edge"]
-
-    _sg_status_str = (
-        f'<span style="color:{_sg_rate_color}; font-weight:bold;">{_sel_row["sg_weekly_rate_centered"]:+.2f} lbs/wk</span> (Centered Retrospective)'
-        if _has_centered
-        else f'<span style="color:{_sg_edge_rate_color}; font-weight:bold;">{_sel_row["sg_weekly_rate_full"]:+.2f} lbs/wk</span> (SG Edge Diagnostic — linear boundary fit)'
-    )
-
-    _line_date = '<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="#64748b" stroke-width="2" stroke-dasharray="2,2"/></svg>'
-    _line_raw = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_raw_color}" stroke-width="2.5"/></svg>'
-    _line_sg_weight = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_sg_weight_color}" stroke-width="2.5"/></svg>'
-    _line_trailing = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_trailing_rate_color}" stroke-width="2.5"/></svg>'
-
-    _curr_dash_attr = 'stroke-dasharray="4,3"' if not _has_centered else ''
-    _curr_sg_color = _sg_rate_color if _has_centered else _sg_edge_rate_color
-    _line_sg_rate = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_curr_sg_color}" stroke-width="2.5" {_curr_dash_attr}/></svg>'
-
-    _readout_ui = mo.md(f"""
-    <div style="background: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid #cbd5e1; font-family: system-ui, sans-serif; font-size: 13px; color: #0f172a; margin-top: 4px;">
-      <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; font-weight: 600; margin-bottom: 6px;">
-        <div>{_line_date}Date: {_sel_date.strftime('%b %d, %Y')}</div>
-        <div>{_line_raw}Raw Weight: <span style="color:{_raw_color}; font-weight:bold;">{_sel_row['weight']:.1f} lbs</span></div>
-        <div>{_line_sg_weight}SG Smoothed Weight: <span style="color:{_sg_weight_color}; font-weight:bold;">{_sel_row['smoothed_weight']:.2f} lbs</span></div>
-      </div>
-      <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; border-top: 1px solid #e2e8f0; padding-top: 6px;">
-        <div>{_line_trailing}<strong>Trailing WLS Causal Nowcast:</strong> <span style="color:{_trailing_rate_color}; font-weight:bold;">{_sel_row['trailing_weekly_rate']:+.2f} lbs/wk</span> (95% CI: [{_sel_row['trailing_rate_lower_95']:+.2f}, {_sel_row['trailing_rate_upper_95']:+.2f}])</div>
-        <div>{_line_sg_rate}<strong>SG Retrospective Rate:</strong> {_sg_status_str}</div>
-      </div>
-    </div>
-    """)
 
     charts_display = mo.vstack([
-        mo.ui.plotly(_fig),
+        mo.hstack([
+            plot_layout_mode,
+            mo.md("*Tip: Choose **Tabs** to focus on one metric at a time, or **Stacked** (or the 'All Metrics' tab) to view all three.*").style({"font-size": "12px", "color": "#64748b", "margin-top": "6px"})
+        ], justify="space-between"),
+        _active_content,
         time_slider,
-        _readout_ui,
     ], gap=0.5).style({"max-height": "none", "overflow": "visible"})
 
     charts_display
@@ -1080,7 +1238,7 @@ def _(
 
     weight_arr = df_raw["weight"].to_numpy()
 
-    # Full SG estimates (mode="interp")
+    # Full SG estimates (mode="interp") for weight
     sg_weight_full = savgol_filter(weight_arr, window_length=_w, polyorder=_polyorder, deriv=0, mode="interp")
     sg_daily_rate_full = savgol_filter(weight_arr, window_length=_w, polyorder=_polyorder, deriv=1, mode="interp")
     sg_weekly_rate_full = sg_daily_rate_full * 7.0
@@ -1108,7 +1266,7 @@ def _(
     results_df["weekly_rate"] = sg_weekly_rate_full
     results_df["is_edge_estimate"] = is_sg_edge
 
-    # Compute trailing causal WLS nowcast
+    # Compute trailing causal WLS nowcast for weight
     _wls_df = compute_trailing_wls(
         df_raw,
         weight_col="weight",
@@ -1118,6 +1276,42 @@ def _(
 
     for _col in _wls_df.columns:
         results_df[_col] = _wls_df[_col]
+
+    # Body Fat and Skeletal Muscle Mass: same SG + trailing WLS as weight
+    for _src_col, _prefix in (("body_fat", "body_fat"), ("muscle_mass", "muscle")):
+        if _src_col not in df_raw or not df_raw[_src_col].notna().any():
+            continue
+        _arr = df_raw[_src_col].to_numpy()
+        _sg_full = savgol_filter(_arr, window_length=_w, polyorder=_polyorder, deriv=0, mode="interp")
+        _sg_rate_full = savgol_filter(_arr, window_length=_w, polyorder=_polyorder, deriv=1, mode="interp") * 7.0
+
+        results_df[f"sg_{_prefix}_full"] = _sg_full
+        results_df[f"sg_{_prefix}_rate_full"] = _sg_rate_full
+        results_df[f"sg_{_prefix}_centered"] = np.where(is_centered_sg, _sg_full, np.nan)
+        results_df[f"sg_{_prefix}_rate_centered"] = np.where(is_centered_sg, _sg_rate_full, np.nan)
+
+        _wls = compute_trailing_wls(
+            df_raw,
+            weight_col=_src_col,
+            window_days=int(rate_window_days.value),
+            half_life_days=float(rate_half_life_days.value),
+        )
+        results_df[f"trailing_{_prefix}_rate"] = _wls["trailing_weekly_rate"]
+        results_df[f"trailing_{_prefix}_lower_95"] = _wls["trailing_rate_lower_95"]
+        results_df[f"trailing_{_prefix}_upper_95"] = _wls["trailing_rate_upper_95"]
+
+    # Share of weight loss that is skeletal muscle over the trailing rate window: the least-squares
+    # slope of smoothed muscle vs. smoothed weight (muscle lbs lost per lb of weight lost) x 100.
+    # Uses every point in the window rather than two endpoints; only shown when smoothed weight
+    # fell by >= 2 lb across the window.
+    if "sg_muscle_full" in results_df:
+        _lag = int(rate_window_days.value)
+        _d_weight = results_df["sg_weight_full"].diff(_lag)
+        _slope = (
+            results_df["sg_weight_full"].rolling(_lag + 1).cov(results_df["sg_muscle_full"])
+            / results_df["sg_weight_full"].rolling(_lag + 1).var()
+        )
+        results_df["muscle_share_of_loss_pct"] = (_slope * 100.0).where(_d_weight <= -2.0)
     return (results_df,)
 
 
@@ -1134,8 +1328,19 @@ def _(df_raw_file, inFNm, mo, np, pd):
         iid_noise = rng.normal(0, 1.0, n_days)
         weekly_cycle = 0.5 * np.sin(2 * np.pi * (t % 7) / 7)
         dates = pd.date_range("2026-06-06", periods=n_days, freq="D")
+
+        # Synthetic body fat: baseline ~22%, trending downward with body mass
+        bf_trend = 22.0 + (trend_vals - 182.0) * 0.15 + rng.normal(0, 0.3, n_days)
+        # Synthetic skeletal muscle mass: baseline ~72 lbs
+        muscle_trend = 72.0 + (trend_vals - 182.0) * 0.25 + rng.normal(0, 0.4, n_days)
+
         return (
-            pd.DataFrame({"date": dates, "weight": trend_vals + iid_noise + weekly_cycle}),
+            pd.DataFrame({
+                "date": dates,
+                "weight": trend_vals + iid_noise + weekly_cycle,
+                "body_fat": bf_trend,
+                "muscle_mass": muscle_trend,
+            }),
             trend_vals,
             true_slope,
         )
@@ -1155,18 +1360,17 @@ def _(df_raw_file, inFNm, mo, np, pd):
         synthetic_trend, synthetic_slope = None, None
         data_source_note = f"Loaded **{len(df_raw)}** rows from `{inFNm}`."
 
-    # Convert date/weight types and sort strictly ASCENDING by date (chronological order)
+    # Convert date/weight/composition types and sort strictly ASCENDING by date (chronological order)
     df_raw["date"] = pd.to_datetime(df_raw["date"])
     df_raw["weight"] = pd.to_numeric(df_raw["weight"], errors="coerce")
+    if "body_fat" in df_raw:
+        df_raw["body_fat"] = pd.to_numeric(df_raw["body_fat"], errors="coerce")
+    if "muscle_mass" in df_raw:
+        df_raw["muscle_mass"] = pd.to_numeric(df_raw["muscle_mass"], errors="coerce")
     df_raw = df_raw.dropna(subset=["date", "weight"]).sort_values("date", ascending=True).reset_index(drop=True)
 
     mo.md(data_source_note)
     return (df_raw,)
-
-
-@app.cell
-def _():
-    return
 
 
 if __name__ == "__main__":
