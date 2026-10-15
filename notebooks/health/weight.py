@@ -744,7 +744,19 @@ def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
     _sg_weight_color = "crimson"  # Crimson matching SG Smoothed Weight
     _sg_rate_color = "#1d4ed8"  # Royal blue matching Centered SG Retrospective Rate
     _trailing_rate_color = "#059669"  # Emerald green matching Trailing WLS Causal Nowcast
-    _sg_edge_rate_color = "#f97316"  # Orange matching SG Boundary Derivative Diagnostic
+    _sg_edge_rate_color = "#ea580c"  # Deep orange matching SG Boundary Derivative Diagnostic (high contrast with white text)
+
+    # Restrict boundary/edge traces to edge regions (NaN in interior) so they do not overlap
+    # the centered solid lines or intercept hover events in the interior.
+    # Include the single boundary contact point on each side so dashed edge lines seamlessly meet solid centered lines.
+    _is_edge_connected = results_df["is_sg_edge"].copy()
+    _centered_indices = np.where(results_df["is_centered_sg"])[0]
+    if len(_centered_indices) > 0:
+        _is_edge_connected.iloc[_centered_indices[0]] = True
+        _is_edge_connected.iloc[_centered_indices[-1]] = True
+
+    _edge_weight = np.where(_is_edge_connected, results_df["sg_weight_full"], np.nan)
+    _edge_rate = np.where(_is_edge_connected, results_df["sg_weekly_rate_full"], np.nan)
 
     _fig = make_subplots(
         rows=2,
@@ -758,44 +770,60 @@ def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
     )
 
     # --- Subplot 1: Weight ---
+    # 1. Raw Weight Scatter/Line
     _fig.add_trace(
         go.Scatter(
             x=results_df["date"],
             y=results_df["weight"],
             mode="lines+markers",
             name="Raw Weight",
+            legendrank=100,
             line=dict(color="rgba(70, 130, 180, 0.4)", width=1.5),
             marker=dict(color=_raw_color, size=4),
             hovertemplate="Date: %{x|%Y-%m-%d}<br>Raw Weight: %{y:.1f} lbs<extra></extra>",
+            hoverlabel=dict(
+                bgcolor=_raw_color,
+                font=dict(color="white"),
+            ),
         ),
         row=1,
         col=1,
     )
 
-    # Main Centered SG Smoothed Weight (Solid Crimson)
+    # 2. Boundary SG Smoothed Weight (Dashed Crimson, diagnostic edge only)
+    _fig.add_trace(
+        go.Scatter(
+            x=results_df["date"],
+            y=_edge_weight,
+            mode="lines",
+            name="Provisional SG Edge Weight",
+            legendrank=120,
+            line=dict(color=_sg_weight_color, width=1.5, dash="dash"),
+            opacity=0.6,
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Edge SG Weight: %{y:.2f} lbs<extra></extra>",
+            hoverlabel=dict(
+                bgcolor=_sg_weight_color,
+                font=dict(color="white"),
+            ),
+        ),
+        row=1,
+        col=1,
+    )
+
+    # 3. Main Centered SG Smoothed Weight (Solid Crimson, rendered on top of edge line)
     _fig.add_trace(
         go.Scatter(
             x=results_df["date"],
             y=results_df["sg_weight_centered"],
             mode="lines",
             name="Centered SG Weight",
+            legendrank=110,
             line=dict(color=_sg_weight_color, width=2.5),
             hovertemplate="Date: %{x|%Y-%m-%d}<br>Centered SG Weight: %{y:.2f} lbs<extra></extra>",
-        ),
-        row=1,
-        col=1,
-    )
-
-    # Boundary SG Smoothed Weight (Dashed Crimson, diagnostic)
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"],
-            y=results_df["sg_weight_full"],
-            mode="lines",
-            name="Provisional SG Edge Weight",
-            line=dict(color=_sg_weight_color, width=1.5, dash="dash"),
-            opacity=0.6,
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Edge SG Weight: %{y:.2f} lbs<extra></extra>",
+            hoverlabel=dict(
+                bgcolor=_sg_weight_color,
+                font=dict(color="white"),
+            ),
         ),
         row=1,
         col=1,
@@ -816,6 +844,10 @@ def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
             ),
             showlegend=False,
             hovertemplate="Selected Date: %{x|%Y-%m-%d}<br>Smoothed: %{y:.2f} lbs<extra></extra>",
+            hoverlabel=dict(
+                bgcolor=_sg_weight_color,
+                font=dict(color="white"),
+            ),
         ),
         row=1,
         col=1,
@@ -829,35 +861,27 @@ def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
         y=0, line_dash="dash", line_color="gray", line_width=1.0, row=2, col=1
     )
 
-    # 1. Primary Centered SG Historical Rate (Solid Blue)
+    # 1. Diagnostic SG Boundary Derivative (Dashed Orange, edge intervals only, added first)
     _fig.add_trace(
         go.Scatter(
             x=results_df["date"],
-            y=results_df["sg_weekly_rate_centered"],
+            y=_edge_rate,
             mode="lines",
-            name="Centered SG Historical Rate (Retrospective)",
-            line=dict(color=_sg_rate_color, width=2.5),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Centered SG Rate: %{y:.2f} lbs/wk<extra></extra>",
+            name="SG Boundary Derivative (Diagnostic Only)",
+            legendrank=230,
+            line=dict(color=_sg_edge_rate_color, width=1.2, dash="dash"),
+            opacity=0.6,
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>SG Edge Derivative: %{y:.2f} lbs/wk (linear diagnostic)<extra></extra>",
+            hoverlabel=dict(
+                bgcolor=_sg_edge_rate_color,
+                font=dict(color="white"),
+            ),
         ),
         row=2,
         col=1,
     )
 
-    # 2. Trailing Causal WLS Nowcast Rate (Solid Emerald Green)
-    _fig.add_trace(
-        go.Scatter(
-            x=results_df["date"],
-            y=results_df["trailing_weekly_rate"],
-            mode="lines",
-            name="Trailing WLS Current Rate (Causal Nowcast)",
-            line=dict(color=_trailing_rate_color, width=2.5),
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>Trailing Rate: %{y:.2f} lbs/wk<extra></extra>",
-        ),
-        row=2,
-        col=1,
-    )
-
-    # 3. Trailing WLS 95% Confidence Band
+    # 2. Trailing WLS 95% Confidence Band
     _fig.add_trace(
         go.Scatter(
             x=results_df["date"].tolist() + results_df["date"].tolist()[::-1],
@@ -867,22 +891,46 @@ def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
             fillcolor="rgba(16, 185, 129, 0.15)",
             line=dict(color="rgba(255,255,255,0)"),
             name="Trailing Rate 95% CI Band",
+            legendrank=220,
             hoverinfo="skip",
         ),
         row=2,
         col=1,
     )
 
-    # 4. Diagnostic SG Boundary Derivative
+    # 3. Trailing Causal WLS Nowcast Rate (Solid Emerald Green)
     _fig.add_trace(
         go.Scatter(
             x=results_df["date"],
-            y=results_df["sg_weekly_rate_full"],
+            y=results_df["trailing_weekly_rate"],
             mode="lines",
-            name="SG Boundary Derivative (Diagnostic Only)",
-            line=dict(color=_sg_edge_rate_color, width=1.2, dash="dash"),
-            opacity=0.5,
-            hovertemplate="Date: %{x|%Y-%m-%d}<br>SG Edge Derivative: %{y:.2f} lbs/wk (linear diagnostic)<extra></extra>",
+            name="Trailing WLS Current Rate (Causal Nowcast)",
+            legendrank=210,
+            line=dict(color=_trailing_rate_color, width=2.5),
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Trailing Rate: %{y:.2f} lbs/wk<extra></extra>",
+            hoverlabel=dict(
+                bgcolor=_trailing_rate_color,
+                font=dict(color="white"),
+            ),
+        ),
+        row=2,
+        col=1,
+    )
+
+    # 4. Primary Centered SG Historical Rate (Solid Blue, rendered on top of boundary diagnostic)
+    _fig.add_trace(
+        go.Scatter(
+            x=results_df["date"],
+            y=results_df["sg_weekly_rate_centered"],
+            mode="lines",
+            name="Centered SG Historical Rate (Retrospective)",
+            legendrank=200,
+            line=dict(color=_sg_rate_color, width=2.5),
+            hovertemplate="Date: %{x|%Y-%m-%d}<br>Centered SG Rate: %{y:.2f} lbs/wk<extra></extra>",
+            hoverlabel=dict(
+                bgcolor=_sg_rate_color,
+                font=dict(color="white"),
+            ),
         ),
         row=2,
         col=1,
@@ -911,6 +959,15 @@ def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
                 line=dict(color="white", width=1.5),
             ),
             showlegend=False,
+            hovertemplate=(
+                f"Selected Date: %{{x|%Y-%m-%d}}<br>"
+                + ("Centered SG Rate: %{y:.2f} lbs/wk" if _has_centered else "Trailing Rate: %{y:.2f} lbs/wk")
+                + "<extra></extra>"
+            ),
+            hoverlabel=dict(
+                bgcolor=_sel_rate_marker_color,
+                font=dict(color="white"),
+            ),
         ),
         row=2,
         col=1,
@@ -932,6 +989,10 @@ def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
             xanchor="center",
             x=0.5,
             font=dict(size=11),
+        ),
+        hoverlabel=dict(
+            font=dict(family="system-ui, -apple-system, sans-serif", size=12, color="white"),
+            bordercolor="rgba(255, 255, 255, 0.4)",
         ),
     )
 
