@@ -1,0 +1,38 @@
+[
+  {
+    "id": "web:25",
+    "name": "IRS historical brackets, 1913\u20132002",
+    "url": "https://www.irs.gov/pub/irs-soi/02inpetr.pdf",
+    "filename": "irs_brackets_1913_2002.pdf"
+  },
+  {
+    "id": "web:9",
+    "name": "Tax Foundation historical brackets",
+    "url": "https://taxfoundation.org/data/all/federal/historical-income-tax-rates-brackets/",
+    "filename": "tax_foundation_brackets.html"
+  },
+  {
+    "id": "web:15",
+    "name": "Minneapolis Fed annual CPI",
+    "url": "https://www.minneapolisfed.org/about-us/monetary-policy/inflation-calculator/consumer-price-index-1913-",
+    "filename": "annual_cpi.html"
+  },
+  {
+    "id": "web:8",
+    "name": "Income Tax Paid at Each Tax Rate, 1958\u20132009",
+    "url": "https://www.urban.org/sites/default/files/publication/27921/901456-Income-Tax-Paid-at-Each-Tax-Rate---Updated-.PDF",
+    "filename": "tax_at_each_rate.pdf"
+  },
+  {
+    "id": "web:1",
+    "name": "IRS historical statistical tables",
+    "url": "https://www.irs.gov/statistics/soi-tax-stats-historical-data-tables",
+    "filename": "irs_historical_tables.html"
+  },
+  {
+    "id": "web:26",
+    "name": "OMB historical budget tables (archived)",
+    "url": "https://obamawhitehouse.archives.gov/omb/budget/Historicals",
+    "filename": "omb_historical_tables.html"
+  }
+]

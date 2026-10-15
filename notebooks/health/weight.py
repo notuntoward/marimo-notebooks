@@ -14,7 +14,7 @@
 
 import marimo
 
-__generated_with = "0.24.0"
+__generated_with = "0.25.1"
 app = marimo.App(width="medium")
 
 
@@ -194,7 +194,6 @@ def _(mo):
     | **Trailing Window ($W_{\text{trail}}^*$)** | $\mathrm{round}(3.32 \cdot h^*)$ | $90\%$ exponential weight mass coverage horizon ($\eta = 0.90$) |
     | **Uncertainty Interval** | $95\%$ Confidence ($1.96 \cdot SE$) | Standard two-sided Gaussian coverage factor $z_{0.975}$ |
     """)
-
     return
 
 
@@ -449,7 +448,7 @@ def _(mo):
 
 @app.cell
 def _():
-    inFNm = "260904 Weight.csv"
+    inFNm = "261015 Weight.csv"
     return (inFNm,)
 
 
@@ -457,6 +456,52 @@ def _():
 def _(inFNm):
     import numpy as _np
     import pandas as _pd
+
+    import io
+    import re
+
+    # A "fragment" is a line holding only the quoted date, e.g.  " Oct 15, 2026",
+    _FRAGMENT = re.compile(r'^\s*"?\s*([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}|\d{4}-\d{2}-\d{2})\s*"?\s*,?\s*$')
+
+    def read_garmin_weight_csv(inFNm):
+        with open(inFNm, "r", encoding="utf-8-sig", newline=None) as f:
+            lines = [ln.rstrip("\r\n") for ln in f if ln.strip()]
+
+        if not lines:
+            return _pd.DataFrame(columns=["date", "weight"])
+
+        has_fragments = any(_FRAGMENT.match(ln) for ln in lines[1:])
+
+        if has_fragments:
+            header = lines[0]
+            if not re.match(r'^\s*"?date"?\b', header, re.IGNORECASE):
+                header = "Date," + header
+
+            fixed = [header]
+            current_date = None
+            repaired = 0
+            for ln in lines[1:]:
+                m = _FRAGMENT.match(ln)
+                if m:
+                    current_date = m.group(1).strip()
+                elif current_date is not None:
+                    fixed.append(f'"{current_date}",' + ln.lstrip())
+                    repaired += 1
+                else:
+                    fixed.append(ln)
+
+            if repaired:
+                print(f"{inFNm}: repaired {repaired} split record(s)")
+
+            df = _pd.read_csv(io.StringIO("\n".join(fixed) + "\n"))
+        else:
+            df = _pd.read_csv(inFNm)
+
+        cols_lower = {col: str(col).strip().lower() for col in df.columns}
+        df = df.rename(columns=cols_lower)
+        return df
+
+    df_raw_file = read_garmin_weight_csv(inFNm)
 
     try:
         def _strip_lbs(x):
@@ -468,17 +513,23 @@ def _(inFNm):
                     return _np.nan
             return x
 
-        df_raw_file = _pd.read_csv(inFNm)
-        cols_lower = {col: str(col).strip().lower() for col in df_raw_file.columns}
-        df_raw_file = df_raw_file.rename(columns=cols_lower)
+        date_col = "date" if "date" in df_raw_file.columns else ("time" if "time" in df_raw_file.columns else None)
+        weight_col = None
+        for col in df_raw_file.columns:
+            if "weight" in col:
+                weight_col = col
+                break
 
-        if "date" in df_raw_file.columns and "weight" in df_raw_file.columns:
-            df_raw_file["date"] = _pd.to_datetime(df_raw_file["date"], errors="coerce")
-            df_raw_file["weight"] = df_raw_file["weight"].apply(_strip_lbs)
+        if date_col is not None and weight_col is not None:
+            df_raw_file["date"] = _pd.to_datetime(df_raw_file[date_col], errors="coerce")
+            df_raw_file["weight"] = df_raw_file[weight_col].apply(_strip_lbs)
             df_raw_file["weight"] = _pd.to_numeric(df_raw_file["weight"], errors="coerce")
 
         if not df_raw_file.empty:
-            df_raw_file = df_raw_file.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+            df_raw_file = df_raw_file.dropna(subset=["date", "weight"]).sort_values("date").reset_index(drop=True)
+            df_raw_file["date"] = df_raw_file["date"].dt.normalize()
+            df_raw_file = df_raw_file.groupby("date", as_index=False)["weight"].mean().sort_values("date").reset_index(drop=True)
+
             _full_dates = _pd.date_range(start=df_raw_file["date"].min(), end=df_raw_file["date"].max(), freq="D")
             df_raw_file = df_raw_file.set_index("date").reindex(_full_dates).rename_axis("date").reset_index().sort_values("date", ascending=True).reset_index(drop=True)
 
@@ -509,9 +560,18 @@ def _(inFNm):
                     print(f"  Gap of {_length} day(s): {_cnt} time(s)")
             else:
                 print("  No missing points found.")
-    except Exception:
+    except Exception as _err:
+        print(f"Error processing {inFNm}: {_err}")
         df_raw_file = []
     return (df_raw_file,)
+
+
+@app.cell(hide_code=True)
+def _(df_raw_file, results_df):
+    print(f"start: {results_df.date.min()}, end: {results_df.date.max()}")
+
+    df_raw_file
+    return
 
 
 @app.cell(hide_code=True)
@@ -921,7 +981,7 @@ def weight_and_rate_cell(go, make_subplots, mo, np, results_df, time_slider):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
     ## 12. Today's Estimate and Recent History

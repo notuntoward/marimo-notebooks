@@ -1,0 +1,80 @@
+[
+  {
+    "id": "web:25",
+    "name": "IRS historical brackets, 1913\u20132002",
+    "url": "https://www.irs.gov/pub/irs-soi/02inpetr.pdf",
+    "filename": "irs_brackets_1913_2002.pdf",
+    "checked_at_utc": "2026-10-06T04:33:32.204783+00:00",
+    "status": "downloaded",
+    "final_url": "https://www.irs.gov/pub/irs-soi/02inpetr.pdf",
+    "content_type": "application/pdf",
+    "retrieved_at_utc": "2026-10-06T04:33:32.204783+00:00",
+    "bytes": 56657,
+    "sha256": "95334c6248aad036643478096c6c61bfac13ebdc051051feeed06f6ee0eef262"
+  },
+  {
+    "id": "web:9",
+    "name": "Tax Foundation historical brackets",
+    "url": "https://taxfoundation.org/data/all/federal/historical-income-tax-rates-brackets/",
+    "filename": "tax_foundation_brackets.html",
+    "checked_at_utc": "2026-10-06T04:33:32.593405+00:00",
+    "status": "downloaded",
+    "final_url": "https://taxfoundation.org/data/all/federal/historical-income-tax-rates-brackets/",
+    "content_type": "text/html; charset=UTF-8",
+    "retrieved_at_utc": "2026-10-06T04:33:32.593405+00:00",
+    "bytes": 1275477,
+    "sha256": "2fe77893b73cb51fba275010e7783b0e206d3c757fab039669798051fdf4a9b7"
+  },
+  {
+    "id": "web:15",
+    "name": "Minneapolis Fed annual CPI",
+    "url": "https://www.minneapolisfed.org/about-us/monetary-policy/inflation-calculator/consumer-price-index-1913-",
+    "filename": "annual_cpi.html",
+    "checked_at_utc": "2026-10-06T04:33:32.826864+00:00",
+    "status": "downloaded",
+    "final_url": "https://www.minneapolisfed.org/about-us/monetary-policy/inflation-calculator/consumer-price-index-1913-",
+    "content_type": "text/html; charset=utf-8",
+    "retrieved_at_utc": "2026-10-06T04:33:32.826864+00:00",
+    "bytes": 370613,
+    "sha256": "f31a682e61a895ec9cc9f151c4ae14b277fd8ea70af0e340a2ade5a916893105"
+  },
+  {
+    "id": "web:8",
+    "name": "Income Tax Paid at Each Tax Rate, 1958\u20132009",
+    "url": "https://www.urban.org/sites/default/files/publication/27921/901456-Income-Tax-Paid-at-Each-Tax-Rate---Updated-.PDF",
+    "filename": "tax_at_each_rate.pdf",
+    "checked_at_utc": "2026-10-06T04:33:33.722610+00:00",
+    "status": "downloaded",
+    "final_url": "https://www.urban.org/sites/default/files/publication/27921/901456-Income-Tax-Paid-at-Each-Tax-Rate---Updated-.PDF",
+    "content_type": "application/pdf",
+    "retrieved_at_utc": "2026-10-06T04:33:33.722610+00:00",
+    "bytes": 428139,
+    "sha256": "3539cc27696876cb675384b6b5ed804ac8c5e099f2e2decbbeb91c0244567a5a"
+  },
+  {
+    "id": "web:1",
+    "name": "IRS historical statistical tables",
+    "url": "https://www.irs.gov/statistics/soi-tax-stats-historical-data-tables",
+    "filename": "irs_historical_tables.html",
+    "checked_at_utc": "2026-10-06T04:33:34.442112+00:00",
+    "status": "downloaded",
+    "final_url": "https://www.irs.gov/statistics/soi-tax-stats-historical-data-tables",
+    "content_type": "text/html; charset=UTF-8",
+    "retrieved_at_utc": "2026-10-06T04:33:34.442112+00:00",
+    "bytes": 122707,
+    "sha256": "a31e56fa56bb4734d249a7334ddf017c1cab1d9a68f7e8f148e110cffd1d65f8"
+  },
+  {
+    "id": "web:26",
+    "name": "OMB historical budget tables (archived)",
+    "url": "https://obamawhitehouse.archives.gov/omb/budget/Historicals",
+    "filename": "omb_historical_tables.html",
+    "checked_at_utc": "2026-10-06T04:33:34.796826+00:00",
+    "status": "downloaded",
+    "final_url": "https://obamawhitehouse.archives.gov/omb/budget/Historicals",
+    "content_type": "text/html",
+    "retrieved_at_utc": "2026-10-06T04:33:34.796826+00:00",
+    "bytes": 44327,
+    "sha256": "85083a3f1b6bd9fdaecee0e76190711d8ca417f52f7da14df4fcd9695e2ae17d"
+  }
+]
