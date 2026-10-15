@@ -14,7 +14,7 @@
 
 import marimo
 
-__generated_with = "0.24.0"
+__generated_with = "0.25.1"
 app = marimo.App(width="medium")
 
 
@@ -894,7 +894,9 @@ def weight_and_rate_cell(
                 line=dict(color=color_smooth, width=1.5, dash="dash"),
                 opacity=0.6,
                 hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>Edge SG {title_metric}: %{{y:.2f}} {unit}<extra></extra>",
-                hoverlabel=dict(bgcolor=color_smooth, font=dict(color="white")),
+                hoverlabel=dict(
+                    bgcolor=color_smooth, font=dict(color="white")
+                ),
             ),
             row=1,
             col=1,
@@ -910,7 +912,9 @@ def weight_and_rate_cell(
                 legendrank=110,
                 line=dict(color=color_smooth, width=2.5),
                 hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>Centered SG {title_metric}: %{{y:.2f}} {unit}<extra></extra>",
-                hoverlabel=dict(bgcolor=color_smooth, font=dict(color="white")),
+                hoverlabel=dict(
+                    bgcolor=color_smooth, font=dict(color="white")
+                ),
             ),
             row=1,
             col=1,
@@ -932,15 +936,31 @@ def weight_and_rate_cell(
                 ),
                 showlegend=False,
                 hovertemplate=f"Selected Date: %{{x|%Y-%m-%d}}<br>Smoothed: %{{y:.2f}} {unit}<extra></extra>",
-                hoverlabel=dict(bgcolor=color_smooth, font=dict(color="white")),
+                hoverlabel=dict(
+                    bgcolor=color_smooth, font=dict(color="white")
+                ),
             ),
             row=1,
             col=1,
         )
-        _fig.add_vline(x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5, row=1, col=1)
+        _fig.add_vline(
+            x=_sel_date,
+            line_dash="dot",
+            line_color="#64748b",
+            line_width=1.5,
+            row=1,
+            col=1,
+        )
 
         # --- Subplot 2: Rate of Change ---
-        _fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.0, row=2, col=1)
+        _fig.add_hline(
+            y=0,
+            line_dash="dash",
+            line_color="gray",
+            line_width=1.0,
+            row=2,
+            col=1,
+        )
 
         # 1. Diagnostic SG Boundary Derivative (Dashed, edge intervals only, added first)
         _fig.add_trace(
@@ -961,7 +981,9 @@ def weight_and_rate_cell(
 
         # 2. Trailing WLS 95% Confidence Band
         _ci_x = results_df["date"].tolist() + results_df["date"].tolist()[::-1]
-        _ci_y = trailing_upper_vals.tolist() + trailing_lower_vals.tolist()[::-1]
+        _ci_y = (
+            trailing_upper_vals.tolist() + trailing_lower_vals.tolist()[::-1]
+        )
         _fig.add_trace(
             go.Scatter(
                 x=_ci_x,
@@ -987,7 +1009,9 @@ def weight_and_rate_cell(
                 legendrank=210,
                 line=dict(color=color_trailing, width=2.5),
                 hovertemplate=f"Date: %{{x|%Y-%m-%d}}<br>Trailing Rate: %{{y:.2f}} {rate_unit}<extra></extra>",
-                hoverlabel=dict(bgcolor=color_trailing, font=dict(color="white")),
+                hoverlabel=dict(
+                    bgcolor=color_trailing, font=dict(color="white")
+                ),
             ),
             row=2,
             col=1,
@@ -1011,7 +1035,11 @@ def weight_and_rate_cell(
 
         # Selected Date Marker on Subplot 2
         _has_c_rate = not np.isnan(rate_centered_vals[_idx])
-        _sel_rate_num = float(rate_centered_vals[_idx]) if _has_c_rate else float(trailing_rate_vals[_idx])
+        _sel_rate_num = (
+            float(rate_centered_vals[_idx])
+            if _has_c_rate
+            else float(trailing_rate_vals[_idx])
+        )
         _sel_rate_marker_color = color_rate if _has_c_rate else color_trailing
 
         _fig.add_trace(
@@ -1029,15 +1057,28 @@ def weight_and_rate_cell(
                 showlegend=False,
                 hovertemplate=(
                     f"Selected Date: %{{x|%Y-%m-%d}}<br>"
-                    + (f"Centered SG Rate: %{{y:.2f}} {rate_unit}" if _has_c_rate else f"Trailing Rate: %{{y:.2f}} {rate_unit}")
+                    + (
+                        f"Centered SG Rate: %{{y:.2f}} {rate_unit}"
+                        if _has_c_rate
+                        else f"Trailing Rate: %{{y:.2f}} {rate_unit}"
+                    )
                     + "<extra></extra>"
                 ),
-                hoverlabel=dict(bgcolor=_sel_rate_marker_color, font=dict(color="white")),
+                hoverlabel=dict(
+                    bgcolor=_sel_rate_marker_color, font=dict(color="white")
+                ),
             ),
             row=2,
             col=1,
         )
-        _fig.add_vline(x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5, row=2, col=1)
+        _fig.add_vline(
+            x=_sel_date,
+            line_dash="dot",
+            line_color="#64748b",
+            line_width=1.5,
+            row=2,
+            col=1,
+        )
 
         _fig.update_layout(
             template="plotly_white",
@@ -1054,7 +1095,11 @@ def weight_and_rate_cell(
                 font=dict(size=11),
             ),
             hoverlabel=dict(
-                font=dict(family="system-ui, -apple-system, sans-serif", size=12, color="white"),
+                font=dict(
+                    family="system-ui, -apple-system, sans-serif",
+                    size=12,
+                    color="white",
+                ),
                 bordercolor="rgba(255, 255, 255, 0.4)",
             ),
         )
@@ -1062,6 +1107,13 @@ def weight_and_rate_cell(
         _fig.update_yaxes(title_text=f"{title_metric} ({unit})", row=1, col=1)
         _fig.update_yaxes(title_text=f"Rate ({rate_unit})", row=2, col=1)
         _fig.update_xaxes(title_text="Date", row=2, col=1)
+
+        # Summary calculations for this metric
+        _start_val = float(smooth_full_vals[0])
+        _end_val = float(smooth_full_vals[_idx])
+        _diff_val = _end_val - _start_val
+        _pct_val = (_diff_val / _start_val * 100.0) if _start_val != 0 else 0.0
+        _rate_wk = (_diff_val / _weeks_elapsed) if _weeks_elapsed > 0 else 0.0
 
         # Readout UI
         _sel_raw_val = float(raw_vals[_idx])
@@ -1081,56 +1133,135 @@ def weight_and_rate_cell(
         _line_smooth_svg = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{color_smooth}" stroke-width="2.5"/></svg>'
         _line_trailing_svg = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{color_trailing}" stroke-width="2.5"/></svg>'
 
-        _curr_dash = 'stroke-dasharray="4,3"' if not _has_c_rate else ''
+        _curr_dash = 'stroke-dasharray="4,3"' if not _has_c_rate else ""
         _curr_c = color_rate if _has_c_rate else color_edge
         _line_sg_rate_svg = f'<svg width="20" height="12" style="vertical-align: middle; display: inline-block; margin-right: 4px;"><line x1="0" y1="6" x2="20" y2="6" stroke="{_curr_c}" stroke-width="2.5" {_curr_dash}/></svg>'
 
         _readout = mo.md(f"""
         <div style="background: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid #cbd5e1; font-family: system-ui, sans-serif; font-size: 13px; color: #0f172a; margin-top: 4px;">
           <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; font-weight: 600; margin-bottom: 6px;">
-            <div>{_line_date}Date: {_sel_date.strftime('%b %d, %Y')}</div>
+            <div>{_line_date}Date: {_sel_date.strftime("%b %d, %Y")}</div>
             <div>{_line_raw_svg}Raw {title_metric}: <span style="color:{color_raw}; font-weight:bold;">{_sel_raw_val:.1f} {unit}</span></div>
             <div>{_line_smooth_svg}SG Smoothed {title_metric}: <span style="color:{color_smooth}; font-weight:bold;">{_sel_smooth_val:.2f} {unit}</span></div>
           </div>
-          <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; border-top: 1px solid #e2e8f0; padding-top: 6px;">
+          <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; border-top: 1px solid #e2e8f0; padding-top: 6px; margin-bottom: 6px;">
             <div>{_line_trailing_svg}<strong>Trailing WLS Causal Nowcast:</strong> <span style="color:{color_trailing}; font-weight:bold;">{_sel_trailing_rate:+.2f} {rate_unit}</span> (95% CI: [{_sel_trailing_l:+.2f}, {_sel_trailing_u:+.2f}])</div>
             <div>{_line_sg_rate_svg}<strong>SG Retrospective Rate:</strong> {_sg_status}</div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; border-top: 1px dashed #cbd5e1; padding-top: 6px; font-size: 12px; color: #334155; background: #ffffff; margin: 0 -6px -2px -6px; padding: 6px 8px; border-radius: 4px;">
+            <div><strong>Overall ({_start_date.strftime("%b %d")} → {_sel_date.strftime("%b %d")}):</strong> {_start_val:.2f} → {_end_val:.2f} {unit}</div>
+            <div><strong>Total Change:</strong> <span style="color:{color_smooth}; font-weight:bold;">{_diff_val:+.2f} {unit} ({_pct_val:+.2f}%)</span></div>
+            <div><strong>Avg Rate / Wk:</strong> <span style="font-weight:bold;">{_rate_wk:+.2f} {rate_unit}</span> ({_days_elapsed} days)</div>
           </div>
         </div>
         """)
 
         return _fig, _readout
 
+    # Time span from first entry to currently selected date
+    _start_date = results_df["date"].iloc[0]
+    _days_elapsed = max(0, (_sel_date - _start_date).days)
+    _weeks_elapsed = _days_elapsed / 7.0
+
     # (tab label, section heading, title, unit, rate unit, results_df columns, colors)
     # columns: raw, centered level, full level, centered rate, full rate, trailing rate, CI lower, CI upper
     _metric_specs = [
         (
-            "🏋️ Weight", "Weight (lbs)", "Weight", "lbs", "lbs/wk",
-            ["weight", "sg_weight_centered", "sg_weight_full", "sg_weekly_rate_centered",
-             "sg_weekly_rate_full", "trailing_weekly_rate", "trailing_rate_lower_95", "trailing_rate_upper_95"],
+            "🏋️ Weight",
+            "Weight (lbs)",
+            "Weight",
+            "lbs",
+            "lbs/wk",
+            [
+                "weight",
+                "sg_weight_centered",
+                "sg_weight_full",
+                "sg_weekly_rate_centered",
+                "sg_weekly_rate_full",
+                "trailing_weekly_rate",
+                "trailing_rate_lower_95",
+                "trailing_rate_upper_95",
+            ],
             ("#4682b4", "crimson", "#1d4ed8", "#059669", "#ea580c"),
         ),
         (
-            "📊 Body Fat", "Body Fat (%)", "Body Fat", "%", "%/wk",
-            ["body_fat", "sg_body_fat_centered", "sg_body_fat_full", "sg_body_fat_rate_centered",
-             "sg_body_fat_rate_full", "trailing_body_fat_rate", "trailing_body_fat_lower_95", "trailing_body_fat_upper_95"],
+            "📊 Body Fat",
+            "Body Fat (%)",
+            "Body Fat",
+            "%",
+            "%/wk",
+            [
+                "body_fat",
+                "sg_body_fat_centered",
+                "sg_body_fat_full",
+                "sg_body_fat_rate_centered",
+                "sg_body_fat_rate_full",
+                "trailing_body_fat_rate",
+                "trailing_body_fat_lower_95",
+                "trailing_body_fat_upper_95",
+            ],
             ("#d97706", "#7c3aed", "#4338ca", "#0d9488", "#e11d48"),
         ),
         (
-            "💪 Skeletal Muscle Mass", "Skeletal Muscle Mass (lbs)", "Skeletal Muscle Mass", "lbs", "lbs/wk",
-            ["muscle_mass", "sg_muscle_centered", "sg_muscle_full", "sg_muscle_rate_centered",
-             "sg_muscle_rate_full", "trailing_muscle_rate", "trailing_muscle_lower_95", "trailing_muscle_upper_95"],
+            "💪 Skeletal Muscle Mass",
+            "Skeletal Muscle Mass (lbs)",
+            "Skeletal Muscle Mass",
+            "lbs",
+            "lbs/wk",
+            [
+                "muscle_mass",
+                "sg_muscle_centered",
+                "sg_muscle_full",
+                "sg_muscle_rate_centered",
+                "sg_muscle_rate_full",
+                "trailing_muscle_rate",
+                "trailing_muscle_lower_95",
+                "trailing_muscle_upper_95",
+            ],
             ("#0284c7", "#d97706", "#2563eb", "#16a34a", "#dc2626"),
         ),
     ]
 
     # Each figure is built once and shown in exactly one place (never both in tabs and stacked)
     _views = {}
-    for _tab, _heading, _title, _unit, _rate_unit, _cols, _colors in _metric_specs:
+    _summary_metrics = []
+    for (
+        _tab,
+        _heading,
+        _title,
+        _unit,
+        _rate_unit,
+        _cols,
+        _colors,
+    ) in _metric_specs:
         if not all(_c in results_df for _c in _cols):
             continue
+        _smooth_arr = results_df[_cols[2]].to_numpy()
+        _s_val = float(_smooth_arr[0])
+        _e_val = float(_smooth_arr[_idx])
+        _d_val = _e_val - _s_val
+        _p_val = (_d_val / _s_val * 100.0) if _s_val != 0 else 0.0
+        _r_wk = (_d_val / _weeks_elapsed) if _weeks_elapsed > 0 else 0.0
+
+        _summary_metrics.append(
+            {
+                "tab": _tab,
+                "title": _title,
+                "unit": _unit,
+                "rate_unit": _rate_unit,
+                "color": _colors[1],
+                "start_val": _s_val,
+                "end_val": _e_val,
+                "diff": _d_val,
+                "pct": _p_val,
+                "rate": _r_wk,
+            }
+        )
+
         _fig, _readout = _build_metric_chart(
-            _title, _unit, _rate_unit,
+            _title,
+            _unit,
+            _rate_unit,
             *[results_df[_c].to_numpy() for _c in _cols],
             *_colors,
         )
@@ -1151,8 +1282,12 @@ def weight_and_rate_cell(
                 hovertemplate="Date: %{x|%Y-%m-%d}<br>Muscle share of loss: %{y:.0f}%<extra></extra>",
             )
         )
-        _share_fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1.0)
-        _share_fig.add_vline(x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5)
+        _share_fig.add_hline(
+            y=0, line_dash="dash", line_color="gray", line_width=1.0
+        )
+        _share_fig.add_vline(
+            x=_sel_date, line_dash="dot", line_color="#64748b", line_width=1.5
+        )
         _share_fig.update_layout(
             template="plotly_white",
             width=800,
@@ -1187,14 +1322,107 @@ def weight_and_rate_cell(
         else mo.vstack(_stacked_elements, gap=0.5)
     )
 
-    charts_display = mo.vstack([
-        mo.hstack([
-            plot_layout_mode,
-            mo.md("*Tip: Choose **Tabs** to focus on one metric at a time, or **Stacked** (or the 'All Metrics' tab) to view all three.*").style({"font-size": "12px", "color": "#64748b", "margin-top": "6px"})
-        ], justify="space-between"),
-        _active_content,
-        time_slider,
-    ], gap=0.5).style({"max-height": "none", "overflow": "visible"})
+    # --- Summary Scorecard Cards & Compact Table ---
+    _cards_html_parts = []
+    _table_rows_html = []
+    for _m in _summary_metrics:
+        _card = f"""
+        <div style="flex: 1 1 230px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <div style="font-weight: 700; font-size: 14px; color: #1e293b;">{_m["tab"]}</div>
+            <span style="font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 9999px; background: #f1f5f9; color: {_m["color"]};">Smoothed</span>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; background: #f8fafc; border-radius: 6px; padding: 6px 10px; margin-bottom: 10px; font-size: 12px;">
+            <div>
+              <div style="color: #64748b; font-size: 10px;">Start ({_start_date.strftime("%b %d")})</div>
+              <div style="font-weight: 700; color: #0f172a;">{_m["start_val"]:.2f} <span style="font-size: 10px; font-weight: normal; color: #64748b;">{_m["unit"]}</span></div>
+            </div>
+            <div style="color: #94a3b8; font-size: 14px; padding: 0 4px;">→</div>
+            <div style="text-align: right;">
+              <div style="color: #64748b; font-size: 10px;">End ({_sel_date.strftime("%b %d")})</div>
+              <div style="font-weight: 700; color: #0f172a;">{_m["end_val"]:.2f} <span style="font-size: 10px; font-weight: normal; color: #64748b;">{_m["unit"]}</span></div>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1.1fr; gap: 6px; text-align: center; border-top: 1px solid #f1f5f9; padding-top: 8px;">
+            <div>
+              <div style="font-size: 10px; color: #64748b;">Total Change</div>
+              <div style="font-size: 13px; font-weight: 700; color: {_m["color"]};">{_m["diff"]:+.2f} {_m["unit"]}</div>
+            </div>
+            <div>
+              <div style="font-size: 10px; color: #64748b;">% Change</div>
+              <div style="font-size: 13px; font-weight: 700; color: {_m["color"]};">{_m["pct"]:+.2f}%</div>
+            </div>
+            <div>
+              <div style="font-size: 10px; color: #64748b;">Avg / Wk</div>
+              <div style="font-size: 13px; font-weight: 700; color: #334155;">{_m["rate"]:+.2f} <span style="font-size: 9px; font-weight: normal; color: #64748b;">{_m["rate_unit"]}</span></div>
+            </div>
+          </div>
+        </div>
+        """
+        _cards_html_parts.append(_card)
+
+        _row = f"""
+        <tr style="border-bottom: 1px solid #f1f5f9;">
+          <td style="padding: 7px 10px; font-weight: 600; color: #1e293b;">{_m["tab"]}</td>
+          <td style="padding: 7px 10px; color: #475569;">{_m["start_val"]:.2f} {_m["unit"]} <span style="color:#94a3b8; font-size: 11px;">({_start_date.strftime("%b %d, %Y")})</span></td>
+          <td style="padding: 7px 10px; color: #475569;">{_m["end_val"]:.2f} {_m["unit"]} <span style="color:#94a3b8; font-size: 11px;">({_sel_date.strftime("%b %d, %Y")})</span></td>
+          <td style="padding: 7px 10px; text-align: right; font-weight: 700; color: {_m["color"]};">{_m["diff"]:+.2f} {_m["unit"]}</td>
+          <td style="padding: 7px 10px; text-align: right; font-weight: 700; color: {_m["color"]};">{_m["pct"]:+.2f}%</td>
+          <td style="padding: 7px 10px; text-align: right; font-weight: 600; color: #334155;">{_m["rate"]:+.2f} {_m["rate_unit"]}</td>
+        </tr>
+        """
+        _table_rows_html.append(_row)
+
+    _summary_html = f"""
+    <div style="margin-top: 14px; font-family: system-ui, sans-serif;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-weight: 700; font-size: 14px; color: #0f172a;">📊 Trajectory Summary ({_start_date.strftime("%b %d, %Y")} → {_sel_date.strftime("%b %d, %Y")} · {_days_elapsed} days / {_weeks_elapsed:.1f} wks)</span>
+        <span style="font-size: 11px; color: #64748b; font-style: italic;">Smoothed (ŵ) start/end values</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;">
+        {"".join(_cards_html_parts)}
+      </div>
+      <table style="width: 100%; border-collapse: collapse; font-size: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.03);">
+        <thead>
+          <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0; text-align: left; color: #475569; font-weight: 600;">
+            <th style="padding: 8px 10px;">Metric</th>
+            <th style="padding: 8px 10px;">Start Value</th>
+            <th style="padding: 8px 10px;">Selected Value</th>
+            <th style="padding: 8px 10px; text-align: right;">Total Change</th>
+            <th style="padding: 8px 10px; text-align: right;">% Change</th>
+            <th style="padding: 8px 10px; text-align: right;">Avg Rate / Wk</th>
+          </tr>
+        </thead>
+        <tbody>
+          {"".join(_table_rows_html)}
+        </tbody>
+      </table>
+    </div>
+    """
+
+    charts_display = mo.vstack(
+        [
+            mo.hstack(
+                [
+                    plot_layout_mode,
+                    mo.md(
+                        "*Tip: Choose **Tabs** to focus on one metric at a time, or **Stacked** to view all three.*"
+                    ).style(
+                        {
+                            "font-size": "12px",
+                            "color": "#64748b",
+                            "margin-top": "6px",
+                        }
+                    ),
+                ],
+                justify="space-between",
+            ),
+            _active_content,
+            time_slider,
+            mo.md(_summary_html),
+        ],
+        gap=0.5,
+    ).style({"max-height": "none", "overflow": "visible"})
 
     charts_display
     return
