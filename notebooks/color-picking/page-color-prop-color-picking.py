@@ -1,6 +1,6 @@
 # /// script
 # dependencies = [
-#     "marimo",
+#     "marimo>=0.23.3",
 #     "numpy==2.5.2",
 #     "scipy==1.18.1",
 # ]
@@ -9,7 +9,7 @@
 
 import marimo
 
-__generated_with = "0.24.0"
+__generated_with = "0.25.1"
 app = marimo.App(width="medium")
 
 
@@ -654,7 +654,7 @@ def _(
     return solve_advanced_joint_optimization, solve_simultaneous_link_colors
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(mo):
     num_base_colors = mo.ui.slider(
         1, 6, value=3, step=1, show_value=True, label="Number of Base Colors (N)"
@@ -701,7 +701,6 @@ def _(mo):
     chroma_cap = mo.ui.number(
         start=0.02, stop=0.30, step=0.01, value=0.20, label="Chroma Ceiling (C_max)"
     )
-
     return (
         D_bg_input,
         Fd_input,
@@ -722,7 +721,7 @@ def _(mo):
     )
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(
     D_bg_input,
     Fd_input,
@@ -780,7 +779,6 @@ def _(
 
     ui_form = mo.hstack([_theme_col, _opt_col], gap=6, justify="start")
     ui_form
-
     return
 
 
@@ -895,7 +893,6 @@ def _(
     m2_dark_labels = ["Original Dark Theme (D0)"] + [
         f"Joint Dark Bg Db{i+1} (Base {i+1}: {m2_gen_bases[i]})" for i in range(N)
     ]
-
     return (
         Fd,
         Fl,
@@ -1032,7 +1029,6 @@ def _(
         mo.md(f"#### Method 1 Dark Background Note Swatches"),
         *_m1_dark_cards,
     ])
-
     return
 
 
@@ -1150,7 +1146,6 @@ def _(
         mo.md(f"#### Method 2 Dark Background Note Swatches"),
         *_m2_dark_cards,
     ])
-
     return
 
 
