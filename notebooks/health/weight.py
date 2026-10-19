@@ -7,6 +7,7 @@
 #     "pandas==3.0.5",
 #     "plotly==7.0.0",
 #     "pyarrow",
+#     "playwright",
 #     "scipy==1.18.1",
 # ]
 # requires-python = ">=3.12"
@@ -432,72 +433,254 @@ def _(mo):
     ## 7. Load Your Data
 
     On startup, this notebook loads the most recently modified CSV in
-    `notebooks/health/dat`. By default, it will not start a Garmin export unless
-    you click **Start Garmin Connect export**. The button shows the steps and
-    opens Garmin Connect; sign-in, MFA, selecting **Weight → 1 Year → Menu →
-    Export CSV**, and downloading are manual. Upload the downloaded CSV here
-    when prompted. It is saved in `dat` as `Weight_YYMMDD.csv` (with a numeric
-    suffix for a second export on the same day) and plotted immediately.
+    `notebooks/health/dat`. Click **Download latest Garmin weight CSV** to open
+    Garmin Connect in a Chromium window and automate **Weight → 1 Year → Menu →
+    Export CSV**. If Garmin requests sign-in or MFA, complete it in that window;
+    the notebook waits and then continues. The downloaded CSV is saved in `dat`
+    as `Weight_YYMMDD.csv` (with a numeric suffix for another export the same
+    day) and plotted immediately.
 
-    By default, the export flow waits for the button. To show its steps
-    automatically at startup, run:
+    The first run installs Playwright's Chromium browser if needed. Its local
+    sign-in session is kept outside the repository, under
+    `%LOCALAPPDATA%\MarimoGarminWeight` on Windows or
+    `~/MarimoGarminWeight` elsewhere; no password or MFA code is read by the
+    notebook.
+
+    By default, the download starts only when you click the button. To start
+    automatically when launching the notebook, run:
 
     `marimo run notebooks/health/weight.py -- --update-latest true`
 
     Omit the option or pass `--update-latest false` to wait for the button.
-    Garmin requires interactive sign-in/MFA, so even with the option enabled
-    you must manually export and upload the CSV. The CSV needs a date column
-    and a weight column; Garmin's additional body composition columns are used
-    when present.
+    The CSV needs a date column and a weight column; Garmin's additional body
+    composition columns are used when present.
     """)
     return
 
 
 @app.cell
 def _(mo):
-    start_garmin_export = mo.ui.run_button(label="Start Garmin Connect export")
-    weight_csv_upload = mo.ui.file(
-        filetypes=[".csv"],
-        label="Upload Garmin's downloaded Weight.csv",
+    download_latest_button = mo.ui.run_button(
+        label="Download latest Garmin weight CSV",
+        tooltip="Open Garmin Connect and download the one-year weight export.",
     )
-    mo.vstack([start_garmin_export, weight_csv_upload])
-    return start_garmin_export, weight_csv_upload
+    download_latest_button
+    return (download_latest_button,)
 
 
 @app.cell(hide_code=True)
-def _(mo, start_garmin_export):
-    auto_update = str(mo.cli_args().get("update-latest", "false")).lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    update_requested = auto_update or bool(start_garmin_export.value)
+def _(mo):
+    import os as _os
+    import re as _re
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import sys as _sys
+    import time as _time
+    import uuid as _uuid
+    from datetime import date as _date
+    from pathlib import Path as _Path
 
-    if update_requested:
-        export_progress = mo.md("""
-        **Garmin export — steps 1–2 of 3**
+    from playwright.sync_api import sync_playwright
 
-        1. [Open Garmin Connect](https://connect.garmin.com/app/home), sign in
-           yourself, and complete any MFA prompt.
-        2. Open **Weight**, select **1 Year**, then choose **Menu → Export CSV**.
-           Wait for `Weight.csv` to download.
-        3. Upload `Weight.csv` using the file picker above. The notebook will
-           save it in `dat` and refresh the plots.
-        """)
-    else:
-        export_progress = mo.md(
-            "Showing the latest saved CSV. Click **Start Garmin Connect export** "
-            "when you want to download a newer one."
-        )
+    def download_garmin_weight_csv(data_dir, progress):
+        data_dir.mkdir(parents=True, exist_ok=True)
+        profile_parent = _Path(
+            _os.environ.get("LOCALAPPDATA", _Path.home())
+        ) / "MarimoGarminWeight"
+        profile_parent.mkdir(parents=True, exist_ok=True)
+        profile_dir = profile_parent / "browser-profile"
 
-    export_progress
-    return
+        with sync_playwright() as playwright:
+            if not _Path(playwright.chromium.executable_path).is_file():
+                progress.update(
+                    increment=0,
+                    title="Installing Chromium",
+                    subtitle="Playwright is downloading the browser needed for Garmin Connect.",
+                )
+                _subprocess.run(
+                    [_sys.executable, "-m", "playwright", "install", "chromium"],
+                    check=True,
+                )
+
+            progress.update(
+                title="Opening Garmin Connect",
+                subtitle="A separate Chromium window is opening with a local browser profile.",
+            )
+            browser_context = playwright.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,
+                accept_downloads=True,
+                args=["--start-maximized"],
+                ignore_default_args=["--disable-blink-features=AutomationControlled"],
+            )
+            try:
+                page = (
+                    browser_context.pages[0]
+                    if browser_context.pages
+                    else browser_context.new_page()
+                )
+                page.goto(
+                    "https://connect.garmin.com/app/home",
+                    wait_until="domcontentloaded",
+                    timeout=60_000,
+                )
+
+                progress.update(
+                    title="Waiting for Garmin Connect sign-in",
+                    subtitle="If prompted, sign in and complete MFA in the Chromium window.",
+                )
+                login_deadline = _time.monotonic() + 900
+                last_login_update = _time.monotonic()
+                while _time.monotonic() < login_deadline:
+                    page_url = page.url.lower()
+                    password_field = page.locator('input[type="password"]')
+                    if "/app/" in page_url and password_field.count() == 0:
+                        break
+                    if _time.monotonic() - last_login_update >= 5:
+                        progress.update(
+                            increment=0,
+                            title="Waiting for Garmin sign-in",
+                            subtitle=(
+                                "Complete sign-in/MFA in the Chromium window; "
+                                "the notebook will continue automatically."
+                            ),
+                        )
+                        last_login_update = _time.monotonic()
+                    page.wait_for_timeout(1000)
+                else:
+                    raise TimeoutError(
+                        "Garmin sign-in was not completed within 15 minutes. "
+                        "Click the download button to try again."
+                    )
+
+                def click_first_visible(
+                    candidates,
+                    description,
+                    *,
+                    timeout_ms=30_000,
+                    required=True,
+                ):
+                    deadline = _time.monotonic() + timeout_ms / 1000
+                    while _time.monotonic() < deadline:
+                        for candidate in candidates:
+                            for index in range(candidate.count()):
+                                element = candidate.nth(index)
+                                if element.is_visible():
+                                    element.click(timeout=timeout_ms)
+                                    return True
+                        page.wait_for_timeout(250)
+                    if required:
+                        raise RuntimeError(
+                            f"Could not find the Garmin {description} control. "
+                            "Garmin may have changed its interface."
+                        )
+                    return False
+
+                progress.update(
+                    title="Opening the Weight page",
+                    subtitle="Navigating through Garmin Connect's Health Stats.",
+                )
+                health_stats_candidates = [
+                    page.get_by_role("button", name=_re.compile("Health Stats", _re.I)),
+                    page.get_by_text("Health Stats", exact=True),
+                ]
+                click_first_visible(
+                    health_stats_candidates,
+                    "Health Stats",
+                    timeout_ms=5_000,
+                    required=False,
+                )
+
+                weight_candidates = [
+                    page.get_by_role("link", name=_re.compile("^Weight$", _re.I)),
+                    page.get_by_role("button", name=_re.compile("^Weight$", _re.I)),
+                    page.get_by_text("Weight", exact=True),
+                ]
+                click_first_visible(weight_candidates, "Weight")
+
+                progress.update(
+                    title="Selecting the one-year range",
+                    subtitle="Opening Weight history and selecting 1 Year.",
+                )
+                click_first_visible(
+                    [
+                        page.get_by_role("tab", name="1 Year", exact=True),
+                        page.get_by_role("button", name="1 Year", exact=True),
+                        page.get_by_text("1 Year", exact=True),
+                    ],
+                    "1 Year",
+                )
+
+                progress.update(
+                    title="Starting the CSV export",
+                    subtitle="Opening the Weight menu and selecting Export CSV.",
+                )
+                click_first_visible(
+                    [
+                        page.get_by_role("button", name=_re.compile("menu|more|options", _re.I)),
+                        page.locator(
+                            'button[aria-label*="menu" i], '
+                            'button[aria-label*="more" i], '
+                            'button[aria-label*="options" i]'
+                        ),
+                        page.get_by_text("Menu", exact=True),
+                    ],
+                    "three-dot menu",
+                )
+
+                progress.update(
+                    title="Downloading Garmin's CSV",
+                    subtitle="Waiting for the browser download to finish.",
+                )
+                with page.expect_download(timeout=120_000) as download_event:
+                    click_first_visible(
+                        [
+                            page.get_by_role("menuitem", name="Export CSV", exact=True),
+                            page.get_by_text("Export CSV", exact=True),
+                        ],
+                        "Export CSV",
+                    )
+                download = download_event.value
+                if not download.suggested_filename.lower().endswith(".csv"):
+                    raise ValueError(
+                        f"Garmin returned `{download.suggested_filename}` instead of a CSV file."
+                    )
+
+                temp_path = data_dir / f".garmin-download-{_uuid.uuid4().hex}.tmp"
+                try:
+                    download.save_as(str(temp_path))
+                    if not temp_path.is_file() or temp_path.stat().st_size == 0:
+                        raise ValueError("Garmin's downloaded CSV is empty.")
+
+                    date_stamp = _date.today().strftime("%y%m%d")
+                    sequence = 0
+                    while True:
+                        suffix = "" if sequence == 0 else f"_{sequence:02d}"
+                        destination = data_dir / f"Weight_{date_stamp}{suffix}.csv"
+                        file_created = False
+                        try:
+                            with destination.open("xb") as target_file:
+                                file_created = True
+                                with temp_path.open("rb") as source_file:
+                                    _shutil.copyfileobj(source_file, target_file)
+                            break
+                        except FileExistsError:
+                            sequence += 1
+                        except Exception:
+                            if file_created:
+                                destination.unlink(missing_ok=True)
+                            raise
+                    return destination
+                finally:
+                    temp_path.unlink(missing_ok=True)
+            finally:
+                browser_context.close()
+
+    return (download_garmin_weight_csv,)
 
 
 @app.cell(hide_code=True)
-def _(mo, weight_csv_upload):
-    from datetime import date
+def _(download_garmin_weight_csv, download_latest_button, mo):
     from pathlib import Path
 
     health_dir = Path(__file__).resolve().parent
@@ -505,34 +688,27 @@ def _(mo, weight_csv_upload):
     data_dir.mkdir(parents=True, exist_ok=True)
     inFNm = ""
 
-    if weight_csv_upload.value:
-        uploaded_file = weight_csv_upload.value[0]
-        if Path(uploaded_file.name).suffix.lower() != ".csv":
-            raise ValueError("Please upload a Garmin weight CSV file.")
-
-        file_contents = uploaded_file.contents()
-        if not file_contents:
-            raise ValueError("The uploaded Garmin weight CSV is empty.")
-
-        date_stamp = date.today().strftime("%y%m%d")
-        sequence = 0
-        while True:
-            suffix = "" if sequence == 0 else f"_{sequence:02d}"
-            dated_path = data_dir / f"Weight_{date_stamp}{suffix}.csv"
-            file_created = False
-            try:
-                with dated_path.open("xb") as output_file:
-                    file_created = True
-                    output_file.write(file_contents)
-                break
-            except FileExistsError:
-                sequence += 1
-            except Exception:
-                if file_created:
-                    dated_path.unlink(missing_ok=True)
-                raise
-        inFNm = str(dated_path)
-        import_status = f"Export saved to `dat/{dated_path.name}`; loading it for plots."
+    auto_update = str(mo.cli_args().get("update-latest", "false")).lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if auto_update or download_latest_button.value:
+        with mo.status.progress_bar(
+            total=7,
+            title="Starting Garmin Connect export",
+            subtitle="The notebook will pause for sign-in or MFA if requested.",
+            show_rate=False,
+            show_eta=False,
+        ) as progress:
+            downloaded_file = download_garmin_weight_csv(data_dir, progress)
+            progress.update(
+                title="Garmin CSV downloaded",
+                subtitle=f"Saved as dat/{downloaded_file.name}; refreshing the plots.",
+            )
+        inFNm = str(downloaded_file)
+        import_status = f"Downloaded and saved `dat/{downloaded_file.name}`."
     else:
         csv_files = list(data_dir.glob("*.csv"))
         if csv_files:
@@ -544,8 +720,8 @@ def _(mo, weight_csv_upload):
             import_status = f"Loading the most recently updated CSV: `dat/{latest_file.name}`."
         else:
             import_status = (
-                "No CSV found in `dat`. Click **Start Garmin Connect export**, "
-                "complete the manual export steps, then upload the downloaded file."
+                "No CSV found in `dat`. Click **Download latest Garmin weight CSV** "
+                "to start the automated Garmin Connect export."
             )
 
     mo.md(import_status)
