@@ -431,25 +431,125 @@ def _(mo):
     mo.md(r"""
     ## 7. Load Your Data
 
-    Upload a CSV with at least two columns: a date column and a weight column.
-    If no file is uploaded, the notebook falls back to a synthetic example
-    series so every cell below still runs and can be inspected.
+    On startup, this notebook loads the most recently modified CSV in
+    `notebooks/health/dat`. By default, it will not start a Garmin export unless
+    you click **Start Garmin Connect export**. The button shows the steps and
+    opens Garmin Connect; sign-in, MFA, selecting **Weight → 1 Year → Menu →
+    Export CSV**, and downloading are manual. Upload the downloaded CSV here
+    when prompted. It is saved in `dat` as `Weight_YYMMDD.csv` (with a numeric
+    suffix for a second export on the same day) and plotted immediately.
 
-    Expected format (column names are auto-detected via the fields below):
+    By default, the export flow waits for the button. To show its steps
+    automatically at startup, run:
 
-    ```
-    date,weight
-    2026-06-01,181.2
-    2026-06-02,180.6
-    ```
+    `marimo run notebooks/health/weight.py -- --update-latest true`
+
+    Omit the option or pass `--update-latest false` to wait for the button.
+    Garmin requires interactive sign-in/MFA, so even with the option enabled
+    you must manually export and upload the CSV. The CSV needs a date column
+    and a weight column; Garmin's additional body composition columns are used
+    when present.
     """)
     return
 
 
 @app.cell
-def _():
-    inFNm = "261015 Weight.csv"
-    return (inFNm,)
+def _(mo):
+    start_garmin_export = mo.ui.run_button(label="Start Garmin Connect export")
+    weight_csv_upload = mo.ui.file(
+        filetypes=[".csv"],
+        label="Upload Garmin's downloaded Weight.csv",
+    )
+    mo.vstack([start_garmin_export, weight_csv_upload])
+    return start_garmin_export, weight_csv_upload
+
+
+@app.cell(hide_code=True)
+def _(mo, start_garmin_export):
+    auto_update = str(mo.cli_args().get("update-latest", "false")).lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    update_requested = auto_update or bool(start_garmin_export.value)
+
+    if update_requested:
+        export_progress = mo.md("""
+        **Garmin export — steps 1–2 of 3**
+
+        1. [Open Garmin Connect](https://connect.garmin.com/app/home), sign in
+           yourself, and complete any MFA prompt.
+        2. Open **Weight**, select **1 Year**, then choose **Menu → Export CSV**.
+           Wait for `Weight.csv` to download.
+        3. Upload `Weight.csv` using the file picker above. The notebook will
+           save it in `dat` and refresh the plots.
+        """)
+    else:
+        export_progress = mo.md(
+            "Showing the latest saved CSV. Click **Start Garmin Connect export** "
+            "when you want to download a newer one."
+        )
+
+    export_progress
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, weight_csv_upload):
+    from datetime import date
+    from pathlib import Path
+
+    health_dir = Path(__file__).resolve().parent
+    data_dir = health_dir / "dat"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    inFNm = ""
+
+    if weight_csv_upload.value:
+        uploaded_file = weight_csv_upload.value[0]
+        if Path(uploaded_file.name).suffix.lower() != ".csv":
+            raise ValueError("Please upload a Garmin weight CSV file.")
+
+        file_contents = uploaded_file.contents()
+        if not file_contents:
+            raise ValueError("The uploaded Garmin weight CSV is empty.")
+
+        date_stamp = date.today().strftime("%y%m%d")
+        sequence = 0
+        while True:
+            suffix = "" if sequence == 0 else f"_{sequence:02d}"
+            dated_path = data_dir / f"Weight_{date_stamp}{suffix}.csv"
+            file_created = False
+            try:
+                with dated_path.open("xb") as output_file:
+                    file_created = True
+                    output_file.write(file_contents)
+                break
+            except FileExistsError:
+                sequence += 1
+            except Exception:
+                if file_created:
+                    dated_path.unlink(missing_ok=True)
+                raise
+        inFNm = str(dated_path)
+        import_status = f"Export saved to `dat/{dated_path.name}`; loading it for plots."
+    else:
+        csv_files = list(data_dir.glob("*.csv"))
+        if csv_files:
+            latest_file = max(
+                csv_files,
+                key=lambda candidate: (candidate.stat().st_mtime_ns, candidate.name),
+            )
+            inFNm = str(latest_file)
+            import_status = f"Loading the most recently updated CSV: `dat/{latest_file.name}`."
+        else:
+            import_status = (
+                "No CSV found in `dat`. Click **Start Garmin Connect export**, "
+                "complete the manual export steps, then upload the downloaded file."
+            )
+
+    mo.md(import_status)
+    return inFNm, import_status
 
 
 @app.cell(hide_code=True)
@@ -501,7 +601,7 @@ def _(inFNm):
         df = df.rename(columns=cols_lower)
         return df
 
-    df_raw_file = read_garmin_weight_csv(inFNm)
+    df_raw_file = read_garmin_weight_csv(inFNm) if inFNm else _pd.DataFrame()
 
     try:
         def _strip_unit(x):
@@ -1350,10 +1450,10 @@ def _(df_raw_file, inFNm, mo, np, pd):
     if _using_synthetic:
         df_raw, synthetic_trend, synthetic_slope = _make_synthetic()
         data_source_note = (
-            "No file uploaded — using a **synthetic 90-day example** "
+            "No CSV found in `dat` — using a **synthetic 90-day example** "
             "(true slope of -0.20 lb/day for the first 45 days, then -0.05 lb/day, "
             "plus daily noise and a weekly cycle) so the notebook runs end to end. "
-            "Upload your own CSV above to replace this."
+            "Start the Garmin export above and upload a CSV to replace this."
         )
     else:
         df_raw = df_raw_file.copy()
