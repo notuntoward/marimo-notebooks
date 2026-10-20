@@ -1,7 +1,7 @@
 # /// script
 # dependencies = [
 #     "altair==6.2.2",
-#     "marimo",
+#     "marimo>=0.23.3",
 #     "matplotlib==3.11.1",
 #     "numpy==2.5.2",
 #     "pandas==3.0.5",
@@ -15,7 +15,7 @@
 
 import marimo
 
-__generated_with = "0.25.1"
+__generated_with = "0.25.2"
 app = marimo.App(width="medium")
 
 
@@ -469,7 +469,7 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _():
     import os as _os
     import re as _re
     import shutil as _shutil
@@ -491,7 +491,13 @@ def _(mo):
         profile_dir = profile_parent / "browser-profile"
 
         with sync_playwright() as playwright:
-            if not _Path(playwright.chromium.executable_path).is_file():
+            _chrome_exe = _Path(
+                _os.environ.get("PROGRAMFILES", r"C:\Program Files")
+            ) / "Google/Chrome/Application/chrome.exe"
+            _launch_options = {}
+            if _chrome_exe.is_file():
+                _launch_options["channel"] = "chrome"
+            elif not _Path(playwright.chromium.executable_path).is_file():
                 progress.update(
                     increment=0,
                     title="Installing Chromium",
@@ -504,14 +510,16 @@ def _(mo):
 
             progress.update(
                 title="Opening Garmin Connect",
-                subtitle="A separate Chromium window is opening with a local browser profile.",
+                subtitle="A separate browser window is opening with a local browser profile.",
             )
             browser_context = playwright.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=False,
                 accept_downloads=True,
-                args=["--start-maximized"],
+                no_viewport=True,
+                args=["--start-maximized", "--window-position=0,0"],
                 ignore_default_args=["--disable-blink-features=AutomationControlled"],
+                **_launch_options,
             )
             try:
                 page = (
@@ -519,6 +527,7 @@ def _(mo):
                     if browser_context.pages
                     else browser_context.new_page()
                 )
+                page.bring_to_front()
                 page.goto(
                     "https://connect.garmin.com/app/home",
                     wait_until="domcontentloaded",
@@ -565,9 +574,19 @@ def _(mo):
                         for candidate in candidates:
                             for index in range(candidate.count()):
                                 element = candidate.nth(index)
-                                if element.is_visible():
-                                    element.click(timeout=timeout_ms)
-                                    return True
+                                if not element.is_visible():
+                                    continue
+                                for _attempt in ("normal", "force", "dom"):
+                                    try:
+                                        if _attempt == "normal":
+                                            element.click(timeout=3_000)
+                                        elif _attempt == "force":
+                                            element.click(timeout=3_000, force=True)
+                                        else:
+                                            element.dispatch_event("click")
+                                        return True
+                                    except Exception:
+                                        continue
                         page.wait_for_timeout(250)
                     if required:
                         raise RuntimeError(
@@ -580,23 +599,11 @@ def _(mo):
                     title="Opening the Weight page",
                     subtitle="Navigating through Garmin Connect's Health Stats.",
                 )
-                health_stats_candidates = [
-                    page.get_by_role("button", name=_re.compile("Health Stats", _re.I)),
-                    page.get_by_text("Health Stats", exact=True),
-                ]
-                click_first_visible(
-                    health_stats_candidates,
-                    "Health Stats",
-                    timeout_ms=5_000,
-                    required=False,
+                page.goto(
+                    "https://connect.garmin.com/app/weight",
+                    wait_until="domcontentloaded",
+                    timeout=60_000,
                 )
-
-                weight_candidates = [
-                    page.get_by_role("link", name=_re.compile("^Weight$", _re.I)),
-                    page.get_by_role("button", name=_re.compile("^Weight$", _re.I)),
-                    page.get_by_text("Weight", exact=True),
-                ]
-                click_first_visible(weight_candidates, "Weight")
 
                 progress.update(
                     title="Selecting the one-year range",
@@ -617,13 +624,9 @@ def _(mo):
                 )
                 click_first_visible(
                     [
-                        page.get_by_role("button", name=_re.compile("menu|more|options", _re.I)),
                         page.locator(
-                            'button[aria-label*="menu" i], '
-                            'button[aria-label*="more" i], '
-                            'button[aria-label*="options" i]'
+                            "button[class*='Button_small'][class*='Button_iconButton']"
                         ),
-                        page.get_by_text("Menu", exact=True),
                     ],
                     "three-dot menu",
                 )
@@ -702,7 +705,20 @@ def _(download_garmin_weight_csv, download_latest_button, mo):
             show_rate=False,
             show_eta=False,
         ) as progress:
-            downloaded_file = download_garmin_weight_csv(data_dir, progress)
+            _outcome = {}
+
+            def _run_download():
+                try:
+                    _outcome["file"] = download_garmin_weight_csv(data_dir, progress)
+                except BaseException as _exc:
+                    _outcome["error"] = _exc
+
+            _worker = mo.Thread(target=_run_download)
+            _worker.start()
+            _worker.join()
+            if "error" in _outcome:
+                raise _outcome["error"]
+            downloaded_file = _outcome["file"]
             progress.update(
                 title="Garmin CSV downloaded",
                 subtitle=f"Saved as dat/{downloaded_file.name}; refreshing the plots.",
@@ -725,7 +741,7 @@ def _(download_garmin_weight_csv, download_latest_button, mo):
             )
 
     mo.md(import_status)
-    return inFNm, import_status
+    return (inFNm,)
 
 
 @app.cell(hide_code=True)
