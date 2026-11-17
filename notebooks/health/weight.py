@@ -482,6 +482,13 @@ def _():
 
     from playwright.sync_api import sync_playwright
 
+    def _no_window_kwargs():
+        """Windows: run a console child without letting it open a console window."""
+        if _os.name == "nt":
+            return {"creationflags": _subprocess.CREATE_NO_WINDOW}
+        return {}
+
+
     def download_garmin_weight_csv(data_dir, progress):
         data_dir.mkdir(parents=True, exist_ok=True)
         profile_parent = _Path(
@@ -503,9 +510,13 @@ def _():
                     title="Installing Chromium",
                     subtitle="Playwright is downloading the browser needed for Garmin Connect.",
                 )
+                # CREATE_NO_WINDOW stops the Playwright download from opening a
+                # console window when the kernel has no console of its own (for
+                # example when the notebook was started from a GUI application).
                 _subprocess.run(
                     [_sys.executable, "-m", "playwright", "install", "chromium"],
                     check=True,
+                    **_no_window_kwargs(),
                 )
 
             progress.update(

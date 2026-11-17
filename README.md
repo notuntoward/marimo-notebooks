@@ -24,6 +24,46 @@ uv run notebooks/plugin_lab.py
 
 `--sandbox` makes marimo use isolated environments based on each notebook's inline metadata. The only machine-level prerequisite is `uv`; marimo itself is obtained transiently by `uvx`.
 
+## Running on Windows without a console window
+
+Launching a notebook from a GUI application (an agent host, a file manager, a
+desktop shortcut) makes a large black console window appear over the screen
+and stay there for the life of the server. `uvx` and `uv` are console
+subsystem programs, and on Windows a console program started from a process
+with no console of its own is handed a brand-new console. When Windows
+Terminal is the registered default terminal, the OS hosts that console in a
+visible `WindowsTerminal.exe` window.
+
+Two ways to avoid it:
+
+**Run it from a terminal.** A terminal already owns a console, so the whole
+`uvx -> marimo -> python` tree inherits it and nothing new appears.
+
+**Use the launcher.** It runs as a `.pyw` file, so Windows starts it with
+`pythonw.exe` (GUI subsystem, never claims a console), and every child is
+started with `CREATE_NO_WINDOW`, so the tree inherits a hidden console:
+
+```bash
+pythonw scripts/launch_notebook.pyw notebooks/health/weight.py --port 27180 --watch
+pythonw scripts/launch_notebook.pyw notebooks/health/weight.py --port 27180 -- --update-latest true
+```
+
+The server log goes to `data/logs/<notebook>.log` and the URL to
+`data/logs/<notebook>.url`. Pass `--token-file <path>` to have the launcher
+generate a token, write it to that path, and hand it to marimo. Use
+`--detach` to return immediately instead of waiting for the server.
+
+If a stray window is already open from an earlier launch, hide it without
+stopping the server:
+
+```powershell
+Get-Process WindowsTerminal | ForEach-Object { $_.MainWindowHandle } |
+  Where-Object { $_ -ne 0 } | ForEach-Object {
+    Add-Type -Name W -Namespace N -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);'
+    [N.W]::ShowWindow($_, 0)
+  }
+```
+
 ## Layout
 
 ```text
@@ -34,7 +74,10 @@ notebooks/
 data/
   raw/                       # Ignored downloaded/source data
   derived/                   # Ignored generated analysis artifacts
+  logs/                      # Ignored notebook server logs (Windows launcher)
   fixtures/                  # Small, committed synthetic data only
+scripts/
+  launch_notebook.pyw        # Starts a notebook with no console window (Windows)
 src/                         # Shared pure-Python utilities when needed
 .agents/skills/              # Repository-level agent skills or symlinks
 .github/workflows/           # Notebook validation, intentionally no Dependabot
