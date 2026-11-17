@@ -1,11 +1,79 @@
 {
-  "version": 1,
+  "version": 2,
   "skills": {
+    "add-molab-badge": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/add-molab-badge/SKILL.md",
+      "computedHash": "0954bf89f3bc900ea92ed56ffe24aa88e191e4814f6fa366953858e7ace22c13"
+    },
+    "anywidget-generator": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/anywidget/SKILL.md",
+      "computedHash": "b9336efade86f0fd809a2f1162e997926b4514dd80d3b82c644d6d9830141075"
+    },
+    "auto-paper-demo": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/auto-paper-demo/SKILL.md",
+      "computedHash": "ffad9a6c2962907608acfc6da776dff9c3fcd7c4290cd08c90e5cba895204ee1"
+    },
+    "implement-paper": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/implement-paper/SKILL.md",
+      "computedHash": "158e999930fcc2cdb8a85b2827035fc819401f7de14068c0d277fb705144b3b7"
+    },
+    "implement-paper-auto": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/implement-paper-auto/SKILL.md",
+      "computedHash": "6c5617a44948d5c65d4ff2097580f8676bca32104d0647eabaa0f3080d54ed64"
+    },
+    "jupyter-to-marimo": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/jupyter-to-marimo/SKILL.md",
+      "computedHash": "73fc4a1de453b2afb343fcc514b16bd371d050ef5715406ee263a2290c8fd353"
+    },
+    "marimo-batch": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/marimo-batch/SKILL.md",
+      "computedHash": "ed80afb5402acf387754961ea74b34760ecbb1e252082e7aa44057106bd58311"
+    },
+    "marimo-notebook": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/marimo-notebook/SKILL.md",
+      "computedHash": "98100c34dde8ed5f5400bd8183d2401d41877ed43ab7a7e4faa798511ca6f44d"
+    },
     "marimo-pair": {
       "source": "marimo-team/marimo-pair",
+      "commit": "cc32d4eecb21c4bc9bdb79c5d987325f327a2f1c",
       "sourceType": "github",
       "skillPath": "skills/marimo-pair/SKILL.md",
-      "computedHash": "b91b7438f965405fc10a595887f57ce91a308232ede8e64b5445ca6d8c0ff004"
+      "computedHash": "531cea9e3a3aab952c388033590412d09bc506745a6895efe7a31a6c37321188"
+    },
+    "retro-marimo-pair": {
+      "source": "marimo-team/marimo-pair",
+      "commit": "cc32d4eecb21c4bc9bdb79c5d987325f327a2f1c",
+      "sourceType": "github",
+      "skillPath": "skills/retro-marimo-pair/SKILL.md",
+      "computedHash": "6a0613dd3c5065a037c1f5d63221969800824d61b37fa3e0181bbb56edc3cbc6"
+    },
+    "streamlit-to-marimo": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/streamlit-to-marimo/SKILL.md",
+      "computedHash": "841c046af56cf29110519ebe1b353f37740979b09286cc78e58efa814c890f72"
+    },
+    "wasm-compatibility": {
+      "source": "marimo-team/skills",
+      "sourceType": "github",
+      "skillPath": "skills/wasm-compatibility/SKILL.md",
+      "computedHash": "cefcb81a1124aa1acd935d1268072526b8f0bb84ec21508472573f69ca80e1f0"
     }
   }
 }
