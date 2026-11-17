@@ -129,7 +129,11 @@ Keep notebooks self-contained and push them to GitHub. You can then open a noteb
 
 ## Agents
 
-Install the `marimo pair` skill with your preferred agent tooling. Put repository-specific instructions or skill wrappers in `.agents/skills/`; keep personal, cross-project skills outside the repository. Agent configuration is development tooling, not a runtime dependency of a notebook.
+Repository-wide notebook advice is in [AGENTS.md](AGENTS.md), and marimo skills
+are in `.agents/skills/`. OpenCode discovers that skills directory automatically;
+other agents can use their own skill discovery or load a relevant skill from
+there. Keep personal, cross-project skills outside the repository. Agent
+configuration is development tooling, not a runtime dependency of a notebook.
 
 ## CI policy
 
