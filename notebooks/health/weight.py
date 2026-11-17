@@ -1626,43 +1626,8 @@ def weight_and_rate_cell(
     )
 
     # --- Summary Scorecard Cards & Compact Table ---
-    _cards_html_parts = []
     _table_rows_html = []
     for _m in _summary_metrics:
-        _card = f"""
-        <div style="flex: 1 1 230px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <div style="font-weight: 700; font-size: 14px; color: #1e293b;">{_m["tab"]}</div>
-            <span style="font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 9999px; background: #f1f5f9; color: {_m["color"]};">Smoothed</span>
-          </div>
-          <div style="display: flex; align-items: center; justify-content: space-between; background: #f8fafc; border-radius: 6px; padding: 6px 10px; margin-bottom: 10px; font-size: 12px;">
-            <div>
-              <div style="color: #64748b; font-size: 10px;">Start ({_start_date.strftime("%b %d")})</div>
-              <div style="font-weight: 700; color: #0f172a;">{_m["start_val"]:.2f} <span style="font-size: 10px; font-weight: normal; color: #64748b;">{_m["unit"]}</span></div>
-            </div>
-            <div style="color: #94a3b8; font-size: 14px; padding: 0 4px;">→</div>
-            <div style="text-align: right;">
-              <div style="color: #64748b; font-size: 10px;">End ({_sel_date.strftime("%b %d")})</div>
-              <div style="font-weight: 700; color: #0f172a;">{_m["end_val"]:.2f} <span style="font-size: 10px; font-weight: normal; color: #64748b;">{_m["unit"]}</span></div>
-            </div>
-          </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr 1.1fr; gap: 6px; text-align: center; border-top: 1px solid #f1f5f9; padding-top: 8px;">
-            <div>
-              <div style="font-size: 10px; color: #64748b;">Total Change</div>
-              <div style="font-size: 13px; font-weight: 700; color: {_m["color"]};">{_m["diff"]:+.2f} {_m["unit"]}</div>
-            </div>
-            <div>
-              <div style="font-size: 10px; color: #64748b;">% Change</div>
-              <div style="font-size: 13px; font-weight: 700; color: {_m["color"]};">{_m["pct"]:+.2f}%</div>
-            </div>
-            <div>
-              <div style="font-size: 10px; color: #64748b;">Avg / Wk</div>
-              <div style="font-size: 13px; font-weight: 700; color: #334155;">{_m["rate"]:+.2f} <span style="font-size: 9px; font-weight: normal; color: #64748b;">{_m["rate_unit"]}</span></div>
-            </div>
-          </div>
-        </div>
-        """
-        _cards_html_parts.append(_card)
 
         _row = f"""
         <tr style="border-bottom: 1px solid #f1f5f9;">
@@ -1681,9 +1646,6 @@ def weight_and_rate_cell(
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
         <span style="font-weight: 700; font-size: 14px; color: #0f172a;">📊 Trajectory Summary ({_start_date.strftime("%b %d, %Y")} → {_sel_date.strftime("%b %d, %Y")} · {_days_elapsed} days / {_weeks_elapsed:.1f} wks)</span>
         <span style="font-size: 11px; color: #64748b; font-style: italic;">Smoothed (ŵ) start/end values</span>
-      </div>
-      <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;">
-        {"".join(_cards_html_parts)}
       </div>
       <table style="width: 100%; border-collapse: collapse; font-size: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.03);">
         <thead>
