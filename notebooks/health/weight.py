@@ -289,9 +289,14 @@ def _(mo):
       but the filter does not separately estimate a day-of-week effect the way a
       regression with weekday dummies would. Treat a large weekly cycle as a
       contributor to \(\sigma^2\) (noise) rather than to \(w(t)\) (trend).
-    - **Missing days are not imputed.** The notebook assumes one row per
-      calendar day. If you have missing days, fill them (e.g., linear
-      interpolation) before use.
+    - **Missing days are imputed, but flagged and not trusted.** The smoother
+      needs one row per calendar day, so interior gaps are filled with a local
+      quadratic regression (tricube weights) on the days that were actually
+      measured. That follows the trend instead of joining two noisy endpoints.
+      Filled days carry `observed_* = False` and are excluded from the trailing
+      weighted fit and from the muscle-share regression, so a gap widens the
+      uncertainty instead of being treated as data. The GCV window search and
+      the SG smoother still see the filled values.
     - **GCV window selection assumes the tradeoff is uniform across the series.**
       It picks one window length that minimizes *average* error across all days,
       not necessarily the best window for any single day.
@@ -343,15 +348,18 @@ def _():
     from plotly.subplots import make_subplots
     import marimo as mo
 
-    def compute_trailing_wls(df, weight_col="weight", window_days=28, half_life_days=10):
+    def compute_trailing_wls(df, weight_col="weight", window_days=28, half_life_days=10, observed=None):
         """
         Computes rolling trailing weighted local-linear regression for each row in df.
         For day t, uses only observations at or before t (causal nowcast).
         Model: y_{t-j} = alpha - beta * j + eps_{t-j}, where j >= 0 is days back.
         Weight: w_j = 2^(-j / half_life).
+        `observed` (bool array, optional) marks measured days; imputed days get zero weight so a
+        gap widens the uncertainty instead of being treated as data.
         """
         n = len(df)
         weights = df[weight_col].to_numpy()
+        observed_mask = np.ones(n) if observed is None else np.asarray(observed, dtype=float)
 
         trailing_level = np.full(n, np.nan)
         trailing_daily_rate = np.full(n, np.nan)
@@ -367,9 +375,12 @@ def _():
             m = len(sub_weights)
             if m < 3:
                 continue
+            sub_obs = observed_mask[start_idx : i + 1]
+            if sub_obs.sum() < 3:
+                continue
 
             j_vec = np.arange(m - 1, -1, -1, dtype=float)
-            w_vec = 2.0 ** (-j_vec / float(half_life_days))
+            w_vec = 2.0 ** (-j_vec / float(half_life_days)) * sub_obs
 
             X = np.column_stack([np.ones(m), -j_vec])
             W = np.diag(w_vec)
@@ -806,6 +817,32 @@ def _(inFNm):
 
     df_raw_file = read_garmin_weight_csv(inFNm) if inFNm else _pd.DataFrame()
 
+    def _local_fill(_y, _min_bandwidth=14.0, _min_points=10):
+        """Fill interior gaps with a tricube-weighted local quadratic fit to the observed days.
+
+        Unlike linear interpolation this follows the local trend (including curvature)
+        instead of joining two noisy endpoints, so a long gap does not inherit the noise
+        of the two readings that happen to border it.
+        """
+        _y = _np.asarray(_y, dtype=float)
+        _t = _np.arange(len(_y), dtype=float)
+        _obs = ~_np.isnan(_y)
+        if _obs.sum() < 4:
+            return _pd.Series(_y).interpolate(method="linear").bfill().ffill().to_numpy()
+        _t_obs, _y_obs = _t[_obs], _y[_obs]
+        _out = _y.copy()
+        for _i in _np.flatnonzero(~_obs):
+            if _i < _t_obs[0] or _i > _t_obs[-1]:
+                continue
+            _dist = _np.abs(_t_obs - _i)
+            _h = max(_min_bandwidth, _np.sort(_dist)[min(_min_points, len(_dist)) - 1] * 1.0001)
+            _w = _np.clip(1 - (_dist / _h) ** 3, 0, None) ** 3
+            _keep = _w > 0
+            _deg = 2 if _keep.sum() >= 5 else 1
+            _coef = _np.polyfit(_t_obs[_keep] - _i, _y_obs[_keep], _deg, w=_np.sqrt(_w[_keep]))
+            _out[_i] = _coef[-1]
+        return _pd.Series(_out).bfill().ffill().to_numpy()
+
     try:
         def _strip_unit(x):
             if isinstance(x, str):
@@ -873,10 +910,11 @@ def _(inFNm):
                 _gap_lengths.append(_curr_gap)
 
             for _c in _agg_dict.keys():
-                df_raw_file[_c] = df_raw_file[_c].interpolate(method="linear").bfill().ffill()
+                df_raw_file[f"observed_{_c}"] = df_raw_file[_c].notna()
+                df_raw_file[_c] = _local_fill(df_raw_file[_c].to_numpy())
 
-            print("Missing Points Interpolation Summary:")
-            print(f"Number of missing points interpolated: {_num_missing} / {_total_points} ({_pct_missing:.2f}%)")
+            print("Missing Points Imputation Summary (local regression fill):")
+            print(f"Number of missing points imputed: {_num_missing} / {_total_points} ({_pct_missing:.2f}%)")
             print("Histogram of missing gap lengths:")
             if _gap_lengths:
                 _counts = _pd.Series(_gap_lengths).value_counts().sort_index()
@@ -926,13 +964,17 @@ def _(mo):
 
     rate_window_days = mo.ui.slider(start=7, stop=60, step=1, value=28, label="Trailing Rate Window (days)")
     rate_half_life_days = mo.ui.slider(start=3, stop=30, step=1, value=10, label="Recency Half-Life (days)")
+    min_weight_loss = mo.ui.number(
+        start=0.0, stop=10.0, step=0.25, value=2.0, label="Min weight loss for muscle % (lb)"
+    )
 
     mo.vstack([
         mo.hstack([poly_order, min_window, max_window], gap=2),
-        mo.hstack([rate_window_days, rate_half_life_days], gap=2),
+        mo.hstack([rate_window_days, rate_half_life_days, min_weight_loss], gap=2),
     ])
     return (
         max_window,
+        min_weight_loss,
         min_window,
         poly_order,
         rate_half_life_days,
@@ -1117,6 +1159,7 @@ def _(mo):
 def weight_and_rate_cell(
     go,
     make_subplots,
+    min_weight_loss,
     mo,
     np,
     plot_layout_mode,
@@ -1605,8 +1648,9 @@ def weight_and_rate_cell(
             f"**{_sel_date.strftime('%b %d, %Y')}:** {_sel_share:.0f}% of the weight lost over the preceding "
             f"{int(rate_window_days.value)} days was muscle."
             if not np.isnan(_sel_share)
-            else f"**{_sel_date.strftime('%b %d, %Y')}:** undefined (smoothed weight did not drop by at least 2 lb "
-            f"over the preceding {int(rate_window_days.value)} days)."
+            else f"**{_sel_date.strftime('%b %d, %Y')}:** undefined (smoothed weight did not drop by at least "
+            f"{float(min_weight_loss.value):g} lb over the preceding {int(rate_window_days.value)} days, "
+            f"or too few days in that window were measured)."
         )
         _views["🧬 Muscle % of Loss"] = (
             "Muscle Share of Weight Loss (%)",
@@ -1720,6 +1764,7 @@ def _(
     best_window,
     compute_trailing_wls,
     df_raw,
+    min_weight_loss,
     np,
     poly_order,
     rate_half_life_days,
@@ -1765,6 +1810,7 @@ def _(
         weight_col="weight",
         window_days=int(rate_window_days.value),
         half_life_days=float(rate_half_life_days.value),
+        observed=df_raw["observed_weight"].to_numpy(),
     )
 
     for _col in _wls_df.columns:
@@ -1788,6 +1834,7 @@ def _(
             weight_col=_src_col,
             window_days=int(rate_window_days.value),
             half_life_days=float(rate_half_life_days.value),
+            observed=df_raw[f"observed_{_src_col}"].to_numpy(),
         )
         results_df[f"trailing_{_prefix}_rate"] = _wls["trailing_weekly_rate"]
         results_df[f"trailing_{_prefix}_lower_95"] = _wls["trailing_rate_lower_95"]
@@ -1796,15 +1843,21 @@ def _(
     # Share of weight loss that is skeletal muscle over the trailing rate window: the least-squares
     # slope of smoothed muscle vs. smoothed weight (muscle lbs lost per lb of weight lost) x 100.
     # Uses every point in the window rather than two endpoints; only shown when smoothed weight
-    # fell by >= 2 lb across the window.
+    # fell by at least the 'Min weight loss' setting across the window.
     if "sg_muscle_full" in results_df:
         _lag = int(rate_window_days.value)
         _d_weight = results_df["sg_weight_full"].diff(_lag)
+        # Regress only on days where weight and muscle were both measured, and require a minimum
+        # number of such days, so imputed stretches cannot invent a ratio.
+        _paired = df_raw["observed_weight"] & df_raw["observed_muscle_mass"]
+        _sw = results_df["sg_weight_full"].where(_paired)
+        _sm = results_df["sg_muscle_full"].where(_paired)
+        _min_pairs = max(8, int(np.ceil(0.4 * (_lag + 1))))
         _slope = (
-            results_df["sg_weight_full"].rolling(_lag + 1).cov(results_df["sg_muscle_full"])
-            / results_df["sg_weight_full"].rolling(_lag + 1).var()
+            _sw.rolling(_lag + 1, min_periods=_min_pairs).cov(_sm)
+            / _sw.rolling(_lag + 1, min_periods=_min_pairs).var()
         )
-        results_df["muscle_share_of_loss_pct"] = (_slope * 100.0).where(_d_weight <= -2.0)
+        results_df["muscle_share_of_loss_pct"] = (_slope * 100.0).where(_d_weight <= -float(min_weight_loss.value))
     return (results_df,)
 
 
@@ -1861,6 +1914,9 @@ def _(df_raw_file, inFNm, mo, np, pd):
     if "muscle_mass" in df_raw:
         df_raw["muscle_mass"] = pd.to_numeric(df_raw["muscle_mass"], errors="coerce")
     df_raw = df_raw.dropna(subset=["date", "weight"]).sort_values("date", ascending=True).reset_index(drop=True)
+    for _c in ("weight", "body_fat", "muscle_mass"):
+        if _c in df_raw and f"observed_{_c}" not in df_raw:
+            df_raw[f"observed_{_c}"] = df_raw[_c].notna()
 
     mo.md(data_source_note)
     return (df_raw,)
